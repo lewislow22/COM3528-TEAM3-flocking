@@ -10,6 +10,7 @@
 
   <buildtool_depend>catkin</buildtool_depend>
   <exec_depend>com3528_examples</exec_depend>
+  <exec_depend>com3528</exec_depend>
   <export><metapackage/></export>
 
 </package>
