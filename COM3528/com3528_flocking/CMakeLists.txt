@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.0.2)
-project(com3528_examples)
+project(com3528_flocking)
 
 find_package(catkin REQUIRED COMPONENTS
   rospy
