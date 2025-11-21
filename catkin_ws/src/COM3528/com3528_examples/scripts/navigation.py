@@ -227,14 +227,17 @@ class MiRoClient:
 
     def kick(self):
         """
-        [3 of 3] Stop at the ball instead of kicking
+        [3 of 3] Once MiRo is in position, this function now stops instead of kicking the ball
         """
         if self.just_switched:
             print("MiRo reached the ball, stopping!")
             self.just_switched = False
+        # Stop the robot instead of moving forward
         self.drive(0.0, 0.0)
+        # After stopping, reset to look for another ball
         self.status_code = 0
         self.just_switched = True
+
 
     def __init__(self):
         rospy.init_node("stop_at_ball", anonymous=True)
