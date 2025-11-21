@@ -2,13 +2,10 @@
 # -*- coding: utf-8 -*-
 
 """
-This script makes MiRo look for a blue ball and drive to it,
-stopping in front of it instead of kicking.
-
-The code was tested for Python 2 and 3.
+MiRo locates a coloured ball, aligns with it,
+drives toward it, and STOPS instead of kicking.
 """
 
-# Imports
 import os
 import subprocess
 from math import radians
@@ -35,19 +32,17 @@ miro_pub.pub_tone(frequency=300, volume=20, duration=50)
 
 class MiRoClient:
 
-    ##########################
     TICK = 0.02
     CAM_FREQ = 1
     SLOW = 0.1
     FAST = 0.4
     DEBUG = False
-    TRANSLATION_ONLY = False
-    IS_MIROCODE = False
 
     PREPROCESSING_ORDER = ["edge", "smooth", "color", "gaussian"]
 
+    # HSV colour selection parameters
     HSV = True
-    f = lambda x: int(0) if (x < 0) else (int(255) if x > 255 else int(x))
+    f = lambda x: 0 if x < 0 else (255 if x > 255 else x)
     COLOR_HSV = [f(255), f(0), f(0)]
     COLOR_LOW = (f(180), f(0), f(0))
     COLOR_HIGH = (f(255), f(255), f(255))
@@ -61,7 +56,6 @@ class MiRoClient:
 
     DIFFERENCE_SD_LOW = 1.5
     DIFFERENCE_SD_HIGH = 0
-    ##########################
 
     # =========================
     # Reset head
@@ -78,18 +72,20 @@ class MiRoClient:
             if t > 1:
                 break
 
-        self.INTENSITY_CHECK = lambda x: int(0) if (x < 0) else (int(500) if x > 500 else int(x))
-        self.KERNEL_SIZE_CHECK = lambda x: int(3) if (x < 3) else (int(15) if x > 15 else int(x))
-        self.STANDARD_DEVIATION_PROCESS = lambda x: 0.1 if (x < 0.1) else (4.9 if x > 4.9 else round(x, 1))
-        self.DIFFERENCE_CHECK = lambda x: 0.01 if (x < 0.01) else (1.40 if x > 1.40 else round(x, 2))
+        self.INTENSITY_CHECK = lambda x: 0 if x < 0 else (500 if x > 500 else x)
+        self.KERNEL_SIZE_CHECK = lambda x: 3 if x < 3 else (15 if x > 15 else x)
+        self.STANDARD_DEVIATION_PROCESS = lambda x:
+            0.1 if x < 0.1 else (4.9 if x > 4.9 else round(x, 1))
+        self.DIFFERENCE_CHECK = lambda x:
+            0.01 if x < 0.01 else (1.40 if x > 1.40 else round(x, 2))
 
     # =========================
-    # Simple drive wrapper
+    # Drive wrapper
     # =========================
     def drive(self, speed_l=0.1, speed_r=0.1):
         msg_cmd_vel = TwistStamped()
         wheel_speed = [speed_l, speed_r]
-        (dr, dtheta) = wheel_speed2cmd_vel(wheel_speed)
+        dr, dtheta = wheel_speed2cmd_vel(wheel_speed)
         msg_cmd_vel.twist.linear.x = dr
         msg_cmd_vel.twist.angular.z = dtheta
         self.vel_pub.publish(msg_cmd_vel)
@@ -118,7 +114,7 @@ class MiRoClient:
             pass
 
     # =========================
-    # Ball detection
+    # Circle detection (ball)
     # =========================
     def detect_ball(self, frame, index):
         if frame is None:
@@ -131,6 +127,7 @@ class MiRoClient:
         self.new_frame[index] = False
         processed_img = frame
 
+        # preprocess
         for method in self.PREPROCESSING_ORDER:
             if method == "color":
                 if self.HSV:
@@ -166,10 +163,10 @@ class MiRoClient:
             elif method == "edge":
                 processed_img = cv2.Canny(processed_img, self.INTENSITY_LOW, self.INTENSITY_HIGH)
 
+        # convert to gray
         if len(processed_img.shape) == 3:
             processed_img = cv2.cvtColor(processed_img, cv2.COLOR_BGR2GRAY)
 
-        # Hough circle detection
         circles = cv2.HoughCircles(
             processed_img,
             cv2.HOUGH_GRADIENT,
@@ -196,10 +193,10 @@ class MiRoClient:
         if max_circle is None:
             return
 
-        # Draw detected circle
+        # Draw circle
         cv2.circle(frame, (max_circle[0], max_circle[1]), max_circle[2], (0, 255, 0), 2)
 
-        # Normalise
+        # normalise
         max_circle = np.array(max_circle).astype("float32")
         max_circle[0] -= self.x_centre
         max_circle[0] /= self.frame_width
@@ -215,7 +212,7 @@ class MiRoClient:
     # =========================
     def look_for_ball(self):
         if self.just_switched:
-            print("MiRo is looking for the ball...")
+            print("Searching for ball…")
             self.just_switched = False
 
         for idx in range(2):
@@ -233,9 +230,9 @@ class MiRoClient:
     # =========================
     # Align
     # =========================
-    def lock_onto_ball(self, error=25):
+    def lock_onto_ball(self):
         if self.just_switched:
-            print("MiRo is locking onto the ball...")
+            print("Aligning to ball…")
             self.just_switched = False
 
         for idx in range(2):
@@ -246,10 +243,8 @@ class MiRoClient:
 
         if not self.ball[0] and self.ball[1]:
             self.drive(self.SLOW, -self.SLOW)
-
         elif self.ball[0] and not self.ball[1]:
             self.drive(-self.SLOW, self.SLOW)
-
         elif self.ball[0] and self.ball[1]:
             error = 0.05
             left_x = self.ball[0][0]
@@ -263,43 +258,45 @@ class MiRoClient:
             else:
                 self.status_code = 3
                 self.just_switched = True
-                self.bookmark = self.counter
         else:
-            print("Ball lost while aligning.")
+            print("Lost ball while aligning.")
             self.status_code = 0
             self.just_switched = True
 
     # =========================
-    # NEW: Approach instead of kick
+    # Approach instead of kick
     # =========================
     def approach_ball(self):
         if self.just_switched:
-            print("MiRo is approaching the ball...")
+            print("Approaching ball…")
             self.just_switched = False
 
+        # update ball from both cameras
         for idx in range(2):
             if self.new_frame[idx]:
                 image = self.input_camera[idx]
                 self.ball[idx] = self.detect_ball(image, idx)
 
+        # lost ball
         if not self.ball[0] and not self.ball[1]:
             print("Ball lost while approaching. Restarting search.")
             self.status_code = 0
             self.just_switched = True
             return
 
+        # choose closer detection
         if self.ball[0] and self.ball[1]:
             ball = self.ball[0] if self.ball[0][2] > self.ball[1][2] else self.ball[1]
         else:
             ball = self.ball[0] if self.ball[0] else self.ball[1]
 
         _, _, radius = ball
-        STOP_RADIUS = 0.18  # adjust as needed
+        STOP_RADIUS = 0.18
 
         if radius < STOP_RADIUS:
             self.drive(0.15, 0.15)
         else:
-            print("MiRo reached the ball and stopped.")
+            print("Reached ball. Stopping.")
             self.drive(0, 0)
             self.status_code = 0
             self.just_switched = True
@@ -308,29 +305,28 @@ class MiRoClient:
     # Init
     # =========================
     def __init__(self):
-        if not self.IS_MIROCODE:
-            rospy.init_node("go_to_blue_ball", anonymous=True)
+        rospy.init_node("go_to_blue_ball", anonymous=True)
         rospy.sleep(2.0)
 
         self.image_converter = CvBridge()
-        topic_base_name = "/" + os.getenv("MIRO_ROBOT_NAME")
+        topic_base = "/" + os.getenv("MIRO_ROBOT_NAME")
 
         self.sub_caml = rospy.Subscriber(
-            topic_base_name + "/sensors/caml/compressed",
+            topic_base + "/sensors/caml/compressed",
             CompressedImage, self.callback_caml,
             queue_size=1, tcp_nodelay=True)
 
         self.sub_camr = rospy.Subscriber(
-            topic_base_name + "/sensors/camr/compressed",
+            topic_base + "/sensors/camr/compressed",
             CompressedImage, self.callback_camr,
             queue_size=1, tcp_nodelay=True)
 
         self.vel_pub = rospy.Publisher(
-            topic_base_name + "/control/cmd_vel",
+            topic_base + "/control/cmd_vel",
             TwistStamped, queue_size=0)
 
         self.pub_kin = rospy.Publisher(
-            topic_base_name + "/control/kinematic_joints",
+            topic_base + "/control/kinematic_joints",
             JointState, queue_size=0)
 
         self.input_camera = [None, None]
@@ -339,17 +335,16 @@ class MiRoClient:
         self.frame_width = 640
 
         self.just_switched = True
-        self.bookmark = 0
 
         self.reset_head_pose()
 
     # =========================
-    # Main loop
+    # Main Loop
     # =========================
     def loop(self):
-        print("MiRo plays ball, press CTRL+C to halt...")
-        self.counter = 0
+        print("MiRo playing ball — CTRL+C to stop.")
         self.status_code = 0
+        self.counter = 0
 
         while not rospy.core.is_shutdown():
 
@@ -361,9 +356,10 @@ class MiRoClient:
                 self.lock_onto_ball()
 
             elif self.status_code == 3:
-                self.approach_ball()   # NEW
+                self.approach_ball()
 
             else:
+                # begin search mode
                 self.status_code = 1
 
             self.counter += 1
