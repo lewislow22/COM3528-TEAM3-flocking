@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import numpy as np
 import rospy
 from geometry_msgs.msg import TwistStamped
@@ -39,7 +40,6 @@ class ObstacleAvoidance:
         self.LIGHT_THRESHOLD = 0.75
         self.CLIFF_THRESHOLD = 0.2
 
-
     def sonar_cb(self, msg):
         self.sonar = msg.range
 
@@ -54,7 +54,6 @@ class ObstacleAvoidance:
         self.light_fl = msg.data[0]
         self.light_fr = msg.data[1]
 
-
     def avoidance_required(self):
         reasons = []
 
@@ -68,7 +67,6 @@ class ObstacleAvoidance:
             reasons.append("light_wall")
 
         return len(reasons) > 0, reasons
-
 
     def compute_avoidance(self):
 
@@ -96,7 +94,6 @@ class ObstacleAvoidance:
 
         return 0.0, 0.0
 
-
     def step(self, base_left, base_right):
 
         avoid_now, reasons = self.avoidance_required()
@@ -113,3 +110,15 @@ class ObstacleAvoidance:
 
         return avoid_now, reasons
 
+
+if __name__ == "__main__":
+
+    rospy.init_node("obstacle_avoidance")
+    topic_root = "/" + os.getenv("MIRO_ROBOT_NAME")
+
+    oa = ObstacleAvoidance(topic_root)
+    rate = rospy.Rate(50)
+
+    while not rospy.is_shutdown():
+        oa.step(0.0, 0.0)
+        rate.sleep()
