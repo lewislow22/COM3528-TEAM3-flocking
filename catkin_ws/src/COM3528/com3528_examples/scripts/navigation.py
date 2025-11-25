@@ -13,6 +13,7 @@ For Python 2 you might need to change the shebang line to
 import os
 import subprocess
 from math import radians  # This is used to reset the head pose
+import math
 import numpy as np  # Numerical Analysis library
 import cv2  # Computer Vision library
 
@@ -21,6 +22,8 @@ from sensor_msgs.msg import CompressedImage  # ROS CompressedImage message
 from sensor_msgs.msg import JointState  # ROS joints state message
 from cv_bridge import CvBridge, CvBridgeError  # ROS -> OpenCV converter
 from geometry_msgs.msg import TwistStamped  # ROS cmd_vel (velocity control) message
+
+from obstacle_avoidance import ObstacleAvoidance
 
 import miro2 as miro  # Import MiRo Developer Kit library
 
@@ -92,25 +95,26 @@ class MiRoClient:
         self.STANDARD_DEVIATION_PROCESS = lambda x: 0.1 if (x < 0.1) else (4.9 if x > 4.9 else round(x, 1))
         self.DIFFERENCE_CHECK = lambda x: 0.01 if (x < 0.01) else (1.40 if x > 1.40 else round(x,2))
 
-    def drive(self, speed_l=0.1, speed_r=0.1):  # (m/sec, m/sec)
+    def drive(self, speed_l=0.1, speed_r=0.1):
         """
-        Wrapper to simplify driving MiRo by converting wheel speeds to cmd_vel
+        Drives MiRo with obstacle avoidance.
+        - We propose wheel speeds (speed_l, speed_r)
+        - ObstacleAvoidance overrides them if needed
+        - ObstacleAvoidance publishes the cmd_vel message
         """
-        # Prepare an empty velocity command message
-        msg_cmd_vel = TwistStamped()
 
-        # Desired wheel speed (m/sec)
-        wheel_speed = [speed_l, speed_r]
+        # Update rotated-heading estimate (your SLAM-lite behaviour)
+        avoid, reasons = self.obstacle_avoider.step(speed_l, speed_r)
+        if not avoid:
+            self.update_heading_estimate(speed_l, speed_r)
 
-        # Convert wheel speed to command velocity (m/sec, Rad/sec)
-        (dr, dtheta) = wheel_speed2cmd_vel(wheel_speed)
+        # Push desired wheel speeds into obstacle avoidance module
+        # This returns (avoid_now, reasons)
+        # and internally publishes the TwistStamped (cmd_vel)
+        self.obstacle_avoider.step(speed_l, speed_r)
 
-        # Update the message with the desired speed
-        msg_cmd_vel.twist.linear.x = dr
-        msg_cmd_vel.twist.angular.z = dtheta
+        # Nothing else to publish here — ObstacleAvoidance did it.
 
-        # Publish message to control/cmd_vel topic
-        self.vel_pub.publish(msg_cmd_vel)
 
     def callback_caml(self, ros_image):  # Left camera
         self.callback_cam(ros_image, 0)
@@ -276,40 +280,61 @@ class MiRoClient:
 
     def look_for_ball(self):
         """
-        [1 of 3] Rotate MiRo if it doesn't see a ball in its current
-        position, until it sees one.
+        Search using navigation:
+        - Avoid revisiting previously searched headings
+        - Avoid obstacles
+        - Sweep through all headings systematically
         """
-        if self.just_switched:  # Print once
-            print("MiRo is looking for the ball...")
+        if self.just_switched:
+            print("MiRo beginning structured search…")
             self.just_switched = False
 
-        ball_seen = False  # Flag to check if any ball is detected
-
-        for index in range(2):  # For each camera (0 = left, 1 = right)
+        # 1. Try to detect ball normally
+        ball_seen = False
+        for index in range(2):
             if not self.new_frame[index]:
                 continue
             image = self.input_camera[index]
             self.ball[index] = self.detect_ball(image, index)
-
-            # If ball detected, update last_seen_side
             if self.ball[index]:
                 self.last_seen_side = index
                 ball_seen = True
 
-        if not ball_seen:
-            # No ball detected — turn in direction of last seen side
-            if self.last_seen_side == 0:
-                # Last seen on left, turn left
-                self.drive(-self.SLOW, self.SLOW)
-            elif self.last_seen_side == 1:
-                # Last seen on right, turn right
-                self.drive(self.SLOW, -self.SLOW)
-            else:
-                # No previous knowledge — default turn right
-                self.drive(self.SLOW, -self.SLOW)
-        else:
-            self.status_code = 2  # Switch to the second action
+        if ball_seen:
+            self.status_code = 2
             self.just_switched = True
+            return
+
+        # 2. Check for obstacle
+        avoid, reasons = self.obstacle_avoider.avoidance_required()
+        if avoid:
+            print("Obstacle detected — avoiding:", reasons)
+            self.drive(-self.SLOW, self.SLOW)
+            return
+
+        # 3. Quantize heading
+        quant = int(self.current_heading // self.heading_resolution) * self.heading_resolution
+
+        if quant not in self.visited_map:
+            # New heading → mark visited and scan
+            print(f"Exploring new heading {quant}°")
+            self.visited_map.add(quant)
+            self.drive(0.0, 0.0)  # pause briefly to scan
+            return
+
+        # 4. If heading already visited → rotate to next unvisited
+        for i in range(1, self.total_headings + 1):
+            next_heading = (quant + i * self.heading_resolution) % 360
+            if next_heading not in self.visited_map:
+                # Rotate toward next unvisited direction
+                print(f"Rotating to next unvisited heading {next_heading}°")
+                self.drive(self.SLOW, -self.SLOW)
+                return
+
+        # 5. If all headings visited → stop or reset
+        print("Full 360° search completed — no ball found.")
+        self.drive(0.0, 0.0)
+
 
 
     def lock_onto_ball(self, error=25):
@@ -364,6 +389,21 @@ class MiRoClient:
         self.status_code = 0
         self.just_switched = True
 
+    def update_heading_estimate(self, wl, wr):
+        """
+        Uses wheel speeds to estimate yaw rotation.
+        This is not perfect but is sufficient for search navigation.
+        """
+        now = rospy.get_time()
+        dt = now - self.last_time
+        self.last_time = now
+
+        # Convert wheel speeds (m/s) to angular velocity estimate (deg/s)
+        wheel_base = 0.148  # MiRo wheel separation in meters
+        omega = (wr - wl) / wheel_base  # rad/s
+        self.current_heading += math.degrees(omega * dt)
+        self.current_heading %= 360.0
+
     def __init__(self):
         # Initialise a new ROS node to communicate with MiRo, if needed
         if not self.IS_MIROCODE:
@@ -389,10 +429,6 @@ class MiRoClient:
             queue_size=1,
             tcp_nodelay=True,
         )
-        # Create a new publisher to send velocity commands to the robot
-        self.vel_pub = rospy.Publisher(
-            topic_base_name + "/control/cmd_vel", TwistStamped, queue_size=0
-        )
         # Create a new publisher to move the robot head
         self.pub_kin = rospy.Publisher(
             topic_base_name + "/control/kinematic_joints", JointState, queue_size=0
@@ -413,6 +449,18 @@ class MiRoClient:
         self.reset_head_pose()
         # Remember which direction the ball is facing
         self.last_seen_side = None # 0 = Left, 1 = right
+
+        self.obstacle_avoider = ObstacleAvoidance(topic_base_name)
+
+
+        # Navigation memory
+        self.visited_map = set()
+        self.current_heading = 0.0  # deg
+        self.last_time = rospy.get_time()
+
+        # Avoid infinite spinning
+        self.total_headings = 36  # 36 × 10° steps = full 360 sweep
+        self.heading_resolution = 10  # degrees
 
     def loop(self):
         """
