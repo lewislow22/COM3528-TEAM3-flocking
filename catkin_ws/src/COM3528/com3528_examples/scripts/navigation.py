@@ -146,137 +146,94 @@ class MiRoClient:
 
     def detect_ball(self, frame, index):
         """
-        Image processing operations, fine-tuned to detect a small,
-        toy blue ball in a given frame.
+        Detect a small ball in a given camera frame using dynamic HSV color settings.
+        Returns normalized [x, y, r] of the largest circle detected, or None if not found.
         """
-        if frame is None:  # Sanity check
-            return
 
-        # Debug window to show the frame
-        if self.DEBUG:
-            cv2.imshow("camera" + str(index), frame)
-            cv2.waitKey(1)
+        if frame is None:
+            return None
 
-        # Flag this frame as processed, so that it's not reused in case of lag
+        # Flag this frame as processed
         self.new_frame[index] = False
 
-        processed_img = frame
+        # Copy frame for processing
+        processed_img = frame.copy()
 
-        for method in self.PREPROCESSING_ORDER:
-            if method == "color":
-                if self.HSV == True:
-                    # Get image in HSV (hue, saturation, value) colour format
-                    im_hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+        # ------------------------
+        # 1. Preprocessing: smoothing if requested
+        # ------------------------
+        if "smooth" in self.PREPROCESSING_ORDER:
+            ksize = self.KERNEL_SIZE_CHECK(self.KERNEL_SIZE)
+            processed_img = cv2.GaussianBlur(processed_img, (ksize, ksize), 0)
 
-                    # Specify target ball colour
-                    rgb_colour = np.uint8([[self.COLOR_HSV]])  # e.g. Blue (Note: BGR)
-                    # Convert this colour to HSV colour model
-                    hsv_colour = cv2.cvtColor(rgb_colour, cv2.COLOR_RGB2HSV)
+        # ------------------------
+        # 2. Convert to HSV
+        # ------------------------
+        im_hsv = cv2.cvtColor(processed_img, cv2.COLOR_RGB2HSV)
 
-                    # Extract colour boundaries for masking image
-                    # Get the hue value from the numpy array containing target colour
-                    target_hue = hsv_colour[0, 0][0]
-                    hsv_lo_end = np.array([target_hue - 20, 70, 70])
-                    hsv_hi_end = np.array([target_hue + 20, 255, 255])
+        # Dynamically compute HSV range from COLOR_HSV
+        rgb_target = np.uint8([[self.COLOR_HSV]])  # [[R,G,B]]
+        hsv_target = cv2.cvtColor(rgb_target, cv2.COLOR_RGB2HSV)[0][0]
+        hue = int(hsv_target[0])
+        # Use ±20 hue range, standard S/V thresholds
+        hsv_low = np.array([max(hue-20, 0), 70, 70])
+        hsv_high = np.array([min(hue+20, 179), 255, 255])
 
-                    # Generate the mask based on the desired hue range
-                    mask = cv2.inRange(im_hsv, hsv_lo_end, hsv_hi_end)
-                    processed_img = cv2.bitwise_and(processed_img, processed_img, mask=mask)
-                else:
-                    mask = cv2.inRange(frame, self.COLOR_LOW, self.COLOR_HIGH)
-                    processed_img = cv2.bitwise_and(processed_img, processed_img, mask=mask)
+        # ------------------------
+        # 3. Mask by color
+        # ------------------------
+        mask = cv2.inRange(im_hsv, hsv_low, hsv_high)
+        masked_img = cv2.bitwise_and(processed_img, processed_img, mask=mask)
 
-            elif method == "gaussian":
-                sigma1 = self.DIFFERENCE_CHECK(self.DIFFERENCE_SD_LOW)
-                sigma2 = self.DIFFERENCE_CHECK(self.DIFFERENCE_SD_HIGH)
-                img_gauss1 = cv2.GaussianBlur(processed_img, (0, 0), sigma1)
-                img_gauss2 = cv2.GaussianBlur(processed_img, (0, 0), sigma2)
-                processed_img = img_gauss1 - img_gauss2
-
-            elif method == "smooth":
-                kernel_size = (self.KERNEL_SIZE_CHECK(self.KERNEL_SIZE), self.KERNEL_SIZE_CHECK(self.KERNEL_SIZE))
-
-                if not self.GAUSSIAN_BLURRING:
-                    # average smoothing
-                    kernel = np.ones(kernel_size, np.float32) / kernel_size[0]**2
-                    processed_img = cv2.filter2D(processed_img, -1, kernel)
-
-                else:
-                    # Gaussian blurring
-                    sigma = self.STANDARD_DEVIATION_PROCESS(self.STANDARD_DEVIATION)
-                    processed_img = cv2.GaussianBlur(processed_img, (0,0), sigma) # kernel size computed as: [(sigma - 0.8)/0.3 + 1] / 0.5 + 1
-                                                                    # see opencv documentation
-
-            elif method == "edge":
-                processed_img = cv2.Canny(processed_img, self.INTENSITY_LOW, self.INTENSITY_HIGH)
-
-        # Debug window to show the mask
+        # Debug: show masks
         if self.DEBUG:
-            cv2.imshow("mask" + str(index), processed_img)
+            cv2.imshow(f"mask{index}", mask)
+            cv2.imshow(f"masked_img{index}", masked_img)
             cv2.waitKey(1)
 
-        if len(processed_img.shape) == 3:
-            processed_img = cv2.cvtColor(processed_img, cv2.COLOR_BGR2GRAY)
-
-        # Debug window to show the mask
+        # ------------------------
+        # 4. Convert to grayscale for circle detection
+        # ------------------------
+        gray = cv2.cvtColor(masked_img, cv2.COLOR_RGB2GRAY)
         if self.DEBUG:
-            cv2.imshow("gray" + str(index), processed_img)
+            cv2.imshow(f"gray{index}", gray)
             cv2.waitKey(1)
 
-        # Fine-tune parameters
-        ball_detect_min_dist_between_cens = 40  # Empirical
-        canny_high_thresh = 10  # Empirical
-        ball_detect_sensitivity = 10  # Lower detects more circles, so it's a trade-off
-        ball_detect_min_radius = 5  # Arbitrary, empirical
-        ball_detect_max_radius = 50  # Arbitrary, empirical
-
-        # Find circles using OpenCV routine
-        # This function returns a list of circles, with their x, y and r values
+        # ------------------------
+        # 5. Circle detection
+        # ------------------------
         circles = cv2.HoughCircles(
-            processed_img,
+            gray,
             cv2.HOUGH_GRADIENT,
-            1,
-            ball_detect_min_dist_between_cens,
-            param1=canny_high_thresh,
-            param2=ball_detect_sensitivity,
-            minRadius=ball_detect_min_radius,
-            maxRadius=ball_detect_max_radius,
+            dp=1,
+            minDist=40,
+            param1=50,
+            param2=15,
+            minRadius=5,
+            maxRadius=50
         )
 
         if circles is None:
-            # If no circles were found, just display the original image
-            return
+            return None
 
-        # Get the largest circle
-        max_circle = None
-        self.max_rad = 0
         circles = np.uint16(np.around(circles))
-        for c in circles[0, :]:
-            if c[2] > self.max_rad:
-                self.max_rad = c[2]
-                max_circle = c
-        # This shouldn't happen, but you never know...
-        if max_circle is None:
-            return
+        max_circle = max(circles[0, :], key=lambda c: c[2])  # largest radius
 
-        # Append detected circle and its centre to the frame
-        cv2.circle(frame, (max_circle[0], max_circle[1]), max_circle[2], (0, 255, 0), 2)
-        cv2.circle(frame, (max_circle[0], max_circle[1]), 2, (0, 0, 255), 3)
+        # Draw circle for debugging
         if self.DEBUG:
-            cv2.imshow("circles" + str(index), frame)
+            cv2.circle(frame, (max_circle[0], max_circle[1]), max_circle[2], (0, 255, 0), 2)
+            cv2.circle(frame, (max_circle[0], max_circle[1]), 2, (0, 0, 255), 3)
+            cv2.imshow(f"circles{index}", frame)
             cv2.waitKey(1)
 
-        # Normalise values to: x,y = [-0.5, 0.5], r = [0, 1]
-        max_circle = np.array(max_circle).astype("float32")
-        max_circle[0] -= self.x_centre
-        max_circle[0] /= self.frame_width
-        max_circle[1] -= self.y_centre
-        max_circle[1] /= self.frame_width
-        max_circle[1] *= -1.0
-        max_circle[2] /= self.frame_width
+        # ------------------------
+        # 6. Normalize coordinates
+        # ------------------------
+        x_norm = (max_circle[0] - self.frame_width / 2) / self.frame_width
+        y_norm = -(max_circle[1] - self.frame_height / 2) / self.frame_width  # invert y
+        r_norm = max_circle[2] / self.frame_width
 
-        # Return a list values [x, y, r] for the largest circle
-        return [max_circle[0], max_circle[1], max_circle[2]]
+        return [x_norm, y_norm, r_norm]
 
     def look_for_ball(self):
         """
