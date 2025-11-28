@@ -97,23 +97,14 @@ class MiRoClient:
 
     def drive(self, speed_l=0.1, speed_r=0.1):
         """
-        Drives MiRo with obstacle avoidance.
-        - We propose wheel speeds (speed_l, speed_r)
-        - ObstacleAvoidance overrides them if needed
-        - ObstacleAvoidance publishes the cmd_vel message
+        Simple drive function: send wheel speeds directly without obstacle avoidance.
         """
-
-        # Update rotated-heading estimate (your SLAM-lite behaviour)
-        avoid, reasons = self.obstacle_avoider.step(speed_l, speed_r)
-        if not avoid:
-            self.update_heading_estimate(speed_l, speed_r)
-
-        # Push desired wheel speeds into obstacle avoidance module
-        # This returns (avoid_now, reasons)
-        # and internally publishes the TwistStamped (cmd_vel)
-        self.obstacle_avoider.step(speed_l, speed_r)
-
-        # Nothing else to publish here — ObstacleAvoidance did it.
+        cmd_vel = wheel_speed2cmd_vel(speed_l, speed_r)
+        topic_base_name = "/" + os.getenv("MIRO_ROBOT_NAME")
+        pub = rospy.Publisher(topic_base_name + "/cmd_vel", TwistStamped, queue_size=1)
+        pub.publish(cmd_vel)
+        # Update heading estimate
+        self.update_heading_estimate(speed_l, speed_r)
 
 
     def callback_caml(self, ros_image):  # Left camera
@@ -149,6 +140,8 @@ class MiRoClient:
         Detect a small ball in a given camera frame using dynamic HSV color settings.
         Returns normalized [x, y, r] of the largest circle detected, or None if not found.
         """
+
+        self.COLOR_HSV = [0, 0, 255]   # Blue in RGB (correct)
 
         if frame is None:
             return None
@@ -237,16 +230,9 @@ class MiRoClient:
 
     def look_for_ball(self):
         """
-        Search using navigation:
-        - Avoid revisiting previously searched headings
-        - Avoid obstacles
-        - Sweep through all headings systematically
+        Look around to detect the ball.
+        Rotate slowly if not seen.
         """
-        if self.just_switched:
-            print("MiRo beginning structured search…")
-            self.just_switched = False
-
-        # 1. Try to detect ball normally
         ball_seen = False
         for index in range(2):
             if not self.new_frame[index]:
@@ -258,93 +244,65 @@ class MiRoClient:
                 ball_seen = True
 
         if ball_seen:
-            self.status_code = 2
+            self.status_code = 2  # Switch to lock-on
             self.just_switched = True
-            return
-
-        # 2. Check for obstacle
-        avoid, reasons = self.obstacle_avoider.avoidance_required()
-        if avoid:
-            print("Obstacle detected — avoiding:", reasons)
-            self.drive(-self.SLOW, self.SLOW)
-            return
-
-        # 3. Quantize heading
-        quant = int(self.current_heading // self.heading_resolution) * self.heading_resolution
-
-        if quant not in self.visited_map:
-            # New heading → mark visited and scan
-            print(f"Exploring new heading {quant}°")
-            self.visited_map.add(quant)
-            self.drive(0.0, 0.0)  # pause briefly to scan
-            return
-
-        # 4. If heading already visited → rotate to next unvisited
-        for i in range(1, self.total_headings + 1):
-            next_heading = (quant + i * self.heading_resolution) % 360
-            if next_heading not in self.visited_map:
-                # Rotate toward next unvisited direction
-                print(f"Rotating to next unvisited heading {next_heading}°")
-                self.drive(self.SLOW, -self.SLOW)
-                return
-
-        # 5. If all headings visited → stop or reset
-        print("Full 360° search completed — no ball found.")
-        self.drive(0.0, 0.0)
+        else:
+            # Rotate slowly left/right until found
+            self.drive(self.SLOW, -self.SLOW)
 
 
 
-    def lock_onto_ball(self, error=25):
+    def lock_onto_ball(self, alignment_threshold=0.05, radius_threshold=0.15):
         """
-        [2 of 3] Once a ball has been detected, turn MiRo to face it
+        Turn MiRo to face the ball and move forward until close enough.
         """
-        if self.just_switched:  # Print once
-            print("MiRo is locking on to the ball")
-            self.just_switched = False
-        for index in range(2):  # For each camera (0 = left, 1 = right)
-            # Skip if there's no new image, in case the network is choking
+        for index in range(2):
             if not self.new_frame[index]:
                 continue
             image = self.input_camera[index]
-            # Run the detect ball procedure
             self.ball[index] = self.detect_ball(image, index)
-        # If only the right camera sees the ball, rotate clockwise
-        if not self.ball[0] and self.ball[1]:
-            self.drive(self.SLOW, -self.SLOW)
-        # Conversely, rotate counter-clockwise
-        elif self.ball[0] and not self.ball[1]:
-            self.drive(-self.SLOW, self.SLOW)
-        # Make the MiRo face the ball if it's visible with both cameras
-        elif self.ball[0] and self.ball[1]:
-            error = 0.05  # 5% of image width
-            # Use the normalised values
-            left_x = self.ball[0][0]  # should be in range [0.0, 0.5]
-            right_x = self.ball[1][0]  # should be in range [-0.5, 0.0]
-            rotation_speed = 0.03  # Turn even slower now
-            if abs(left_x) - abs(right_x) > error:
-                self.drive(rotation_speed, -rotation_speed)  # turn clockwise
-            elif abs(left_x) - abs(right_x) < -error:
-                self.drive(-rotation_speed, rotation_speed)  # turn counter-clockwise
+
+        left_ball = self.ball[0]
+        right_ball = self.ball[1]
+
+        if left_ball or right_ball:
+            # Simple alignment: choose whichever sees the ball
+            x = left_ball[0] if left_ball else right_ball[0]
+
+            if abs(x) > alignment_threshold:
+                # Turn toward the ball
+                turn_speed = self.SLOW
+                if x > 0:
+                    self.drive(turn_speed, -turn_speed)  # clockwise
+                else:
+                    self.drive(-turn_speed, turn_speed)  # counter-clockwise
             else:
-                # Successfully turned to face the ball
-                self.status_code = 3  # Switch to the third action
-                self.just_switched = True
-                self.bookmark = self.counter
-        # Otherwise, the ball is lost :-(
+                # Aligned: move forward
+                ball_radius = left_ball[2] if left_ball else right_ball[2]
+                if ball_radius < radius_threshold:
+                    self.drive(self.FAST, self.FAST)  # move forward
+                else:
+                    # Close enough → stop
+                    self.status_code = 3
+                    self.just_switched = True
         else:
-            self.status_code = 0  # Go back to square 1...
-            print("MiRo has lost the ball...")
-            self.just_switched = True
+            # Lost the ball → search again
+            self.status_code = 1
+
 
     # GOAAAL
     def kick(self):
-        "Once in position, Miro stops at the ball instead of kicking it"
+        """
+        Stop MiRo when in front of the ball.
+        """
         if self.just_switched:
             print("Miro reached the ball, stopping!")
             self.just_switched = False
         self.drive(0.0, 0.0)
+        # Reset to search again if needed
         self.status_code = 0
         self.just_switched = True
+
 
     def update_heading_estimate(self, wl, wr):
         """
