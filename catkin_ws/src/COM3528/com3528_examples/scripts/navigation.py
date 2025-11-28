@@ -13,7 +13,6 @@ For Python 2 you might need to change the shebang line to
 import os
 import subprocess
 from math import radians  # This is used to reset the head pose
-import math
 import numpy as np  # Numerical Analysis library
 import cv2  # Computer Vision library
 
@@ -22,8 +21,6 @@ from sensor_msgs.msg import CompressedImage  # ROS CompressedImage message
 from sensor_msgs.msg import JointState  # ROS joints state message
 from cv_bridge import CvBridge, CvBridgeError  # ROS -> OpenCV converter
 from geometry_msgs.msg import TwistStamped  # ROS cmd_vel (velocity control) message
-
-from obstacle_avoidance import ObstacleAvoidance
 
 import miro2 as miro  # Import MiRo Developer Kit library
 
@@ -41,7 +38,7 @@ class MiRoClient:
     CAM_FREQ = 1  # Number of ticks before camera gets a new frame, increase in case of network lag
     SLOW = 0.1  # Radial speed when turning on the spot (rad/s)
     FAST = 0.4  # Linear speed when kicking the ball (m/s)
-    DEBUG = True # Set to True to enable debug views of the cameras
+    DEBUG = False # Set to True to enable debug views of the cameras
     TRANSLATION_ONLY = False # Whether to rotate only
     IS_MIROCODE = False  # Set to True if running in MiRoCODE
 
@@ -95,17 +92,25 @@ class MiRoClient:
         self.STANDARD_DEVIATION_PROCESS = lambda x: 0.1 if (x < 0.1) else (4.9 if x > 4.9 else round(x, 1))
         self.DIFFERENCE_CHECK = lambda x: 0.01 if (x < 0.01) else (1.40 if x > 1.40 else round(x,2))
 
-    def drive(self, speed_l=0.1, speed_r=0.1):
+    def drive(self, speed_l=0.1, speed_r=0.1):  # (m/sec, m/sec)
         """
-        Simple drive function: send wheel speeds directly without obstacle avoidance.
+        Wrapper to simplify driving MiRo by converting wheel speeds to cmd_vel
         """
-        cmd_vel = wheel_speed2cmd_vel(speed_l, speed_r)
-        topic_base_name = "/" + os.getenv("MIRO_ROBOT_NAME")
-        pub = rospy.Publisher(topic_base_name + "/cmd_vel", TwistStamped, queue_size=1)
-        pub.publish(cmd_vel)
-        # Update heading estimate
-        self.update_heading_estimate(speed_l, speed_r)
+        # Prepare an empty velocity command message
+        msg_cmd_vel = TwistStamped()
 
+        # Desired wheel speed (m/sec)
+        wheel_speed = [speed_l, speed_r]
+
+        # Convert wheel speed to command velocity (m/sec, Rad/sec)
+        (dr, dtheta) = wheel_speed2cmd_vel(wheel_speed)
+
+        # Update the message with the desired speed
+        msg_cmd_vel.twist.linear.x = dr
+        msg_cmd_vel.twist.angular.z = dtheta
+
+        # Publish message to control/cmd_vel topic
+        self.vel_pub.publish(msg_cmd_vel)
 
     def callback_caml(self, ros_image):  # Left camera
         self.callback_cam(ros_image, 0)
@@ -137,187 +142,228 @@ class MiRoClient:
 
     def detect_ball(self, frame, index):
         """
-        Detect a small ball in a given camera frame using dynamic HSV color settings.
-        Returns normalized [x, y, r] of the largest circle detected, or None if not found.
+        Image processing operations, fine-tuned to detect a small,
+        toy blue ball in a given frame.
         """
+        if frame is None:  # Sanity check
+            return
 
-        self.COLOR_HSV = [0, 0, 255]   # Blue in RGB (correct)
+        # Debug window to show the frame
+        if self.DEBUG:
+            cv2.imshow("camera" + str(index), frame)
+            cv2.waitKey(1)
 
-        if frame is None:
-            return None
-
-        # Flag this frame as processed
+        # Flag this frame as processed, so that it's not reused in case of lag
         self.new_frame[index] = False
 
-        # Copy frame for processing
-        processed_img = frame.copy()
+        processed_img = frame
 
-        # ------------------------
-        # 1. Preprocessing: smoothing if requested
-        # ------------------------
-        if "smooth" in self.PREPROCESSING_ORDER:
-            ksize = self.KERNEL_SIZE_CHECK(self.KERNEL_SIZE)
-            processed_img = cv2.GaussianBlur(processed_img, (ksize, ksize), 0)
+        for method in self.PREPROCESSING_ORDER:
+            if method == "color":
+                if self.HSV == True:
+                    # Get image in HSV (hue, saturation, value) colour format
+                    im_hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
 
-        # ------------------------
-        # 2. Convert to HSV
-        # ------------------------
-        im_hsv = cv2.cvtColor(processed_img, cv2.COLOR_RGB2HSV)
+                    # Specify target ball colour
+                    rgb_colour = np.uint8([[self.COLOR_HSV]])  # e.g. Blue (Note: BGR)
+                    # Convert this colour to HSV colour model
+                    hsv_colour = cv2.cvtColor(rgb_colour, cv2.COLOR_RGB2HSV)
 
-        # Dynamically compute HSV range from COLOR_HSV
-        rgb_target = np.uint8([[self.COLOR_HSV]])  # [[R,G,B]]
-        hsv_target = cv2.cvtColor(rgb_target, cv2.COLOR_RGB2HSV)[0][0]
-        hue = int(hsv_target[0])
-        # Use ±20 hue range, standard S/V thresholds
-        hsv_low = np.array([max(hue-20, 0), 70, 70])
-        hsv_high = np.array([min(hue+20, 179), 255, 255])
+                    # Extract colour boundaries for masking image
+                    # Get the hue value from the numpy array containing target colour
+                    target_hue = hsv_colour[0, 0][0]
+                    hsv_lo_end = np.array([target_hue - 20, 70, 70])
+                    hsv_hi_end = np.array([target_hue + 20, 255, 255])
 
-        # ------------------------
-        # 3. Mask by color
-        # ------------------------
-        mask = cv2.inRange(im_hsv, hsv_low, hsv_high)
-        masked_img = cv2.bitwise_and(processed_img, processed_img, mask=mask)
+                    # Generate the mask based on the desired hue range
+                    mask = cv2.inRange(im_hsv, hsv_lo_end, hsv_hi_end)
+                    processed_img = cv2.bitwise_and(processed_img, processed_img, mask=mask)
+                else:
+                    mask = cv2.inRange(frame, self.COLOR_LOW, self.COLOR_HIGH)
+                    processed_img = cv2.bitwise_and(processed_img, processed_img, mask=mask)
 
-        # Debug: show masks
+            elif method == "gaussian":
+                sigma1 = self.DIFFERENCE_CHECK(self.DIFFERENCE_SD_LOW)
+                sigma2 = self.DIFFERENCE_CHECK(self.DIFFERENCE_SD_HIGH)
+                img_gauss1 = cv2.GaussianBlur(processed_img, (0, 0), sigma1)
+                img_gauss2 = cv2.GaussianBlur(processed_img, (0, 0), sigma2)
+                processed_img = img_gauss1 - img_gauss2
+
+            elif method == "smooth":
+                kernel_size = (self.KERNEL_SIZE_CHECK(self.KERNEL_SIZE), self.KERNEL_SIZE_CHECK(self.KERNEL_SIZE))
+
+                if not self.GAUSSIAN_BLURRING:
+                    # average smoothing
+                    kernel = np.ones(kernel_size, np.float32) / kernel_size[0]**2
+                    processed_img = cv2.filter2D(processed_img, -1, kernel)
+
+                else:
+                    # Gaussian blurring
+                    sigma = self.STANDARD_DEVIATION_PROCESS(self.STANDARD_DEVIATION)
+                    processed_img = cv2.GaussianBlur(processed_img, (0,0), sigma) # kernel size computed as: [(sigma - 0.8)/0.3 + 1] / 0.5 + 1
+                                                                    # see opencv documentation
+
+            elif method == "edge":
+                processed_img = cv2.Canny(processed_img, self.INTENSITY_LOW, self.INTENSITY_HIGH)
+
+        # Debug window to show the mask
         if self.DEBUG:
-            cv2.imshow(f"mask{index}", mask)
-            cv2.imshow(f"masked_img{index}", masked_img)
+            cv2.imshow("mask" + str(index), processed_img)
             cv2.waitKey(1)
 
-        # ------------------------
-        # 4. Convert to grayscale for circle detection
-        # ------------------------
-        gray = cv2.cvtColor(masked_img, cv2.COLOR_RGB2GRAY)
+        if len(processed_img.shape) == 3:
+            processed_img = cv2.cvtColor(processed_img, cv2.COLOR_BGR2GRAY)
+
+        # Debug window to show the mask
         if self.DEBUG:
-            cv2.imshow(f"gray{index}", gray)
+            cv2.imshow("gray" + str(index), processed_img)
             cv2.waitKey(1)
 
-        # ------------------------
-        # 5. Circle detection
-        # ------------------------
+        # Fine-tune parameters
+        ball_detect_min_dist_between_cens = 40  # Empirical
+        canny_high_thresh = 10  # Empirical
+        ball_detect_sensitivity = 10  # Lower detects more circles, so it's a trade-off
+        ball_detect_min_radius = 5  # Arbitrary, empirical
+        ball_detect_max_radius = 50  # Arbitrary, empirical
+
+        # Find circles using OpenCV routine
+        # This function returns a list of circles, with their x, y and r values
         circles = cv2.HoughCircles(
-            gray,
+            processed_img,
             cv2.HOUGH_GRADIENT,
-            dp=1,
-            minDist=40,
-            param1=50,
-            param2=15,
-            minRadius=5,
-            maxRadius=50
+            1,
+            ball_detect_min_dist_between_cens,
+            param1=canny_high_thresh,
+            param2=ball_detect_sensitivity,
+            minRadius=ball_detect_min_radius,
+            maxRadius=ball_detect_max_radius,
         )
 
         if circles is None:
-            return None
+            # If no circles were found, just display the original image
+            return
 
+        # Get the largest circle
+        max_circle = None
+        self.max_rad = 0
         circles = np.uint16(np.around(circles))
-        max_circle = max(circles[0, :], key=lambda c: c[2])  # largest radius
+        for c in circles[0, :]:
+            if c[2] > self.max_rad:
+                self.max_rad = c[2]
+                max_circle = c
+        # This shouldn't happen, but you never know...
+        if max_circle is None:
+            return
 
-        # Draw circle for debugging
+        # Append detected circle and its centre to the frame
+        cv2.circle(frame, (max_circle[0], max_circle[1]), max_circle[2], (0, 255, 0), 2)
+        cv2.circle(frame, (max_circle[0], max_circle[1]), 2, (0, 0, 255), 3)
         if self.DEBUG:
-            cv2.circle(frame, (max_circle[0], max_circle[1]), max_circle[2], (0, 255, 0), 2)
-            cv2.circle(frame, (max_circle[0], max_circle[1]), 2, (0, 0, 255), 3)
-            cv2.imshow(f"circles{index}", frame)
+            cv2.imshow("circles" + str(index), frame)
             cv2.waitKey(1)
 
-        # ------------------------
-        # 6. Normalize coordinates
-        # ------------------------
-        x_norm = (max_circle[0] - self.frame_width / 2) / self.frame_width
-        y_norm = -(max_circle[1] - self.frame_height / 2) / self.frame_width  # invert y
-        r_norm = max_circle[2] / self.frame_width
+        # Normalise values to: x,y = [-0.5, 0.5], r = [0, 1]
+        max_circle = np.array(max_circle).astype("float32")
+        max_circle[0] -= self.x_centre
+        max_circle[0] /= self.frame_width
+        max_circle[1] -= self.y_centre
+        max_circle[1] /= self.frame_width
+        max_circle[1] *= -1.0
+        max_circle[2] /= self.frame_width
 
-        return [x_norm, y_norm, r_norm]
+        # Return a list values [x, y, r] for the largest circle
+        return [max_circle[0], max_circle[1], max_circle[2]]
 
     def look_for_ball(self):
         """
-        Look around to detect the ball.
-        Rotate slowly if not seen.
+        [1 of 3] Rotate MiRo if it doesn't see a ball in its current
+        position, until it sees one.
         """
-        ball_seen = False
-        for index in range(2):
+        if self.just_switched:  # Print once
+            print("MiRo is looking for the ball...")
+            self.just_switched = False
+        for index in range(2):  # For each camera (0 = left, 1 = right)
+            # Skip if there's no new image, in case the network is choking
             if not self.new_frame[index]:
                 continue
             image = self.input_camera[index]
+            # Run the detect ball procedure
             self.ball[index] = self.detect_ball(image, index)
-            if self.ball[index]:
-                self.last_seen_side = index
-                ball_seen = True
-
-        if ball_seen:
-            self.status_code = 2  # Switch to lock-on
-            self.just_switched = True
-        else:
-            # Rotate slowly left/right until found
+        # If no ball has been detected
+        if not self.ball[0] and not self.ball[1]:
             self.drive(self.SLOW, -self.SLOW)
+        else:
+            self.status_code = 2  # Switch to the second action
+            self.just_switched = True
 
-
-
-    def lock_onto_ball(self, alignment_threshold=0.05, radius_threshold=0.15):
+    def lock_onto_ball(self, error=25):
         """
-        Turn MiRo to face the ball and move forward until close enough.
+        [2 of 3] Once a ball has been detected, turn MiRo to face it
         """
-        for index in range(2):
+        if self.just_switched:  # Print once
+            print("MiRo is locking on to the ball")
+            self.just_switched = False
+        for index in range(2):  # For each camera (0 = left, 1 = right)
+            # Skip if there's no new image, in case the network is choking
             if not self.new_frame[index]:
                 continue
             image = self.input_camera[index]
+            # Run the detect ball procedure
             self.ball[index] = self.detect_ball(image, index)
-
-        left_ball = self.ball[0]
-        right_ball = self.ball[1]
-
-        if left_ball or right_ball:
-            # Simple alignment: choose whichever sees the ball
-            x = left_ball[0] if left_ball else right_ball[0]
-
-            if abs(x) > alignment_threshold:
-                # Turn toward the ball
-                turn_speed = self.SLOW
-                if x > 0:
-                    self.drive(turn_speed, -turn_speed)  # clockwise
-                else:
-                    self.drive(-turn_speed, turn_speed)  # counter-clockwise
+        # If only the right camera sees the ball, rotate clockwise
+        if not self.ball[0] and self.ball[1]:
+            self.drive(self.SLOW, -self.SLOW)
+        # Conversely, rotate counter-clockwise
+        elif self.ball[0] and not self.ball[1]:
+            self.drive(-self.SLOW, self.SLOW)
+        # Make the MiRo face the ball if it's visible with both cameras
+        elif self.ball[0] and self.ball[1]:
+            error = 0.05  # 5% of image width
+            # Use the normalised values
+            left_x = self.ball[0][0]  # should be in range [0.0, 0.5]
+            right_x = self.ball[1][0]  # should be in range [-0.5, 0.0]
+            rotation_speed = 0.03  # Turn even slower now
+            if abs(left_x) - abs(right_x) > error:
+                self.drive(rotation_speed, -rotation_speed)  # turn clockwise
+            elif abs(left_x) - abs(right_x) < -error:
+                self.drive(-rotation_speed, rotation_speed)  # turn counter-clockwise
             else:
-                # Aligned: move forward
-                ball_radius = left_ball[2] if left_ball else right_ball[2]
-                if ball_radius < radius_threshold:
-                    self.drive(self.FAST, self.FAST)  # move forward
-                else:
-                    # Close enough → stop
-                    self.status_code = 3
-                    self.just_switched = True
+                # Successfully turned to face the ball
+                self.status_code = 3  # Switch to the third action
+                self.just_switched = True
+                self.bookmark = self.counter
+        # Otherwise, the ball is lost :-(
         else:
-            # Lost the ball → search again
-            self.status_code = 1
-
+            self.status_code = 0  # Go back to square 1...
+            print("MiRo has lost the ball...")
+            self.just_switched = True
 
     # GOAAAL
     def kick(self):
         """
-        Stop MiRo when in front of the ball.
+        [3 of 3] Once MiRO is in position, this function should drive the MiRo
+        forward until it kicks the ball!
         """
-        if self.just_switched:
-            print("Miro reached the ball, stopping!")
-            self.just_switched = False
-        self.drive(0.0, 0.0)
-        # Reset to search again if needed
-        self.status_code = 0
-        self.just_switched = True
+        if not hasattr(self, 'has_kicked'):
+            self.has_kicked = False  # Initialize kick flag
 
+        # Only perform kick if not done yet
+        if not self.has_kicked:
+            if self.just_switched:
+                print("MiRo is kicking the ball!")
+                self.just_switched = False
 
-    def update_heading_estimate(self, wl, wr):
-        """
-        Uses wheel speeds to estimate yaw rotation.
-        This is not perfect but is sufficient for search navigation.
-        """
-        now = rospy.get_time()
-        dt = now - self.last_time
-        self.last_time = now
-
-        # Convert wheel speeds (m/s) to angular velocity estimate (deg/s)
-        wheel_base = 0.148  # MiRo wheel separation in meters
-        omega = (wr - wl) / wheel_base  # rad/s
-        self.current_heading += math.degrees(omega * dt)
-        self.current_heading %= 360.0
+            if self.counter <= self.bookmark + 2 / self.TICK and not self.TRANSLATION_ONLY:
+                self.drive(self.FAST, self.FAST)  # Move forward to kick
+            else:
+                self.drive(0.0, 0.0)  # Stop after kick
+                self.has_kicked = True  # Record that we kicked once
+                print("Kick complete — MiRo stopped.")
+                self.status_code = 0
+                self.just_switched = True
+        else:
+            # Already kicked, just stay stopped
+            self.drive(0.0, 0.0)
 
     def __init__(self):
         # Initialise a new ROS node to communicate with MiRo, if needed
@@ -344,6 +390,10 @@ class MiRoClient:
             queue_size=1,
             tcp_nodelay=True,
         )
+        # Create a new publisher to send velocity commands to the robot
+        self.vel_pub = rospy.Publisher(
+            topic_base_name + "/control/cmd_vel", TwistStamped, queue_size=0
+        )
         # Create a new publisher to move the robot head
         self.pub_kin = rospy.Publisher(
             topic_base_name + "/control/kinematic_joints", JointState, queue_size=0
@@ -362,20 +412,6 @@ class MiRoClient:
         self.bookmark = 0
         # Move the head to default pose
         self.reset_head_pose()
-        # Remember which direction the ball is facing
-        self.last_seen_side = None # 0 = Left, 1 = right
-
-        self.obstacle_avoider = ObstacleAvoidance(topic_base_name)
-
-
-        # Navigation memory
-        self.visited_map = set()
-        self.current_heading = 0.0  # deg
-        self.last_time = rospy.get_time()
-
-        # Avoid infinite spinning
-        self.total_headings = 36  # 36 × 10° steps = full 360 sweep
-        self.heading_resolution = 10  # degrees
 
     def loop(self):
         """
