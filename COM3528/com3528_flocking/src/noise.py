@@ -43,6 +43,7 @@ import audio_perception as audio
 
 miro_pub = mri.MiRoPublishers()
 miro_pub.pub_tone(frequency=300, volume=20, duration=50)
+miro_pub.pub_cosmetic_joints(ear_left=1, ear_right=1)
 
 class MiRoClient:
 	
