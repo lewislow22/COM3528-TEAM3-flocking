@@ -1,3 +1,6 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import numpy as np
 import miro_constants as con
 
@@ -81,7 +84,6 @@ class FrequencyPerception:
 				f_left[frq] = None
 
 		# TODO: Get front/back bias from centre/tail mics (needs further calibration due to differing sensitivities)
-
 		return f_left
 
 	# def isClose(self, data):
