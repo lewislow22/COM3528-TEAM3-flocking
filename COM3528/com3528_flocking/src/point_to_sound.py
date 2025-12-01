@@ -85,8 +85,8 @@ class AudioClient():
         self.tail_plot.set_ylabel("Tail", rotation=0, ha="right")
         self.tail_ys = np.zeros(self.x_len)
         self.tail_line, = self.tail_plot.plot(self.tail_xs, self.tail_ys, linewidth=0.5, color="c")
-
-        self.ani = animation.FuncAnimation(self.fig, self.update_line, fargs=(self.left_ear_ys,self.right_ear_ys, self.head_ys, self.tail_ys,), init_func=self.animation_init, interval=10, blit=False)
+        
+        #self.ani = animation.FuncAnimation(self.fig, self.update_line, fargs=(self.left_ear_ys,self.right_ear_ys, self.head_ys, self.tail_ys,), init_func=self.animation_init, interval=10, blit=False)
         self.fig.subplots_adjust(hspace=0, wspace=0)
 
         self.input_mics = np.zeros((self.x_len, self.no_of_mics))
@@ -301,5 +301,5 @@ if __name__ == "__main__":
     rospy.init_node("point_to_sound", anonymous=True)
     AudioEng = DetectAudioEngine()
     main = AudioClient()
-    plt.show() # to stop signal display next run: comment this line and line 89(self.ani...)
+    #plt.show() # to stop signal display next run: comment this line and line 89(self.ani...)
     main.loop()
