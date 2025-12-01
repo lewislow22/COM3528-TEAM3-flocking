@@ -17,6 +17,9 @@ import matplotlib.animation as animation
 from geometry_msgs.msg import Twist, TwistStamped
 import time
 
+import miro_ros_interface as mri
+
+
 
 try:  # For convenience, import this util separately
     from miro2.lib import wheel_speed2cmd_vel  # Python 3
@@ -126,6 +129,10 @@ class AudioClient():
         self.thresh = 0
         self.thresh_min = 0.03
 
+        # miro_pub = mri.MiRoPublishers()
+        # self.pub_cosmetic_joints(ear_left=1, ear_right=1)
+
+
     def drive(self, speed_l=0.1, speed_r=0.1):  # (m/sec, m/sec)
         """
         Wrapper to simplify driving MiRo by converting wheel speeds to cmd_vel
@@ -208,7 +215,7 @@ class AudioClient():
             self.frame_p = ae_head.x
             self.turn_to_sound()
             print("MiRo is moving......")
-            self.status_code = 0 
+            self.status_code = 3
 
 
     def turn_to_sound(self): 
@@ -225,12 +232,17 @@ class AudioClient():
             self.msg_wheels.twist.linear.x = 0.0
             self.msg_wheels.twist.angular.z = v*2
 
-            # test output
-            #self.msg_wheels.twist.angular.z = 0.0
-
             self.pub_wheels.publish(self.msg_wheels)
             time.sleep(0.02)
             T1+=0.02
+
+        self.status_code = 3
+        
+
+    def forward(self):
+        self.msg_wheels.twist.linear.x = 0.1
+        self.msg_wheels.twist.angular.z = 0
+        self.pub_wheels.publish(self.msg_wheels)
 
 
     def loop(self):
@@ -252,6 +264,11 @@ class AudioClient():
                 #clear the data collected when miro is turning
                 self.audio_event=[]
 
+            elif self.status_code == 3:
+                self.forward()
+                self.voice_accident()
+                if self.status_code == 0:
+                    self.status_code = 3
 
             # Fall back
             else:
