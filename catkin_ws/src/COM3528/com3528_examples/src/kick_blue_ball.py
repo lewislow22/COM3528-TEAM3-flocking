@@ -344,14 +344,26 @@ class MiRoClient:
         [3 of 3] Once MiRO is in position, this function should drive the MiRo
         forward until it kicks the ball!
         """
-        if self.just_switched:
-            print("MiRo is kicking the ball!")
-            self.just_switched = False
-        if self.counter <= self.bookmark + 2 / self.TICK and not self.TRANSLATION_ONLY:
-            self.drive(self.FAST, self.FAST)
+        if not hasattr(self, 'has_kicked'):
+            self.has_kicked = False  # Initialize kick flag
+
+        # Only perform kick if not done yet
+        if not self.has_kicked:
+            if self.just_switched:
+                print("MiRo is kicking the ball!")
+                self.just_switched = False
+
+            if self.counter <= self.bookmark + 2 / self.TICK and not self.TRANSLATION_ONLY:
+                self.drive(self.FAST, self.FAST)  # Move forward to kick
+            else:
+                self.drive(0.0, 0.0)  # Stop after kick
+                self.has_kicked = True  # Record that we kicked once
+                print("Kick complete — MiRo stopped.")
+                self.status_code = 0
+                self.just_switched = True
         else:
-            self.status_code = 0  # Back to the default state after the kick
-            self.just_switched = True
+            # Already kicked, just stay stopped
+            self.drive(0.0, 0.0)
 
     def __init__(self):
         # Initialise a new ROS node to communicate with MiRo, if needed
