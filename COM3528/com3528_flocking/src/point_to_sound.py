@@ -151,6 +151,8 @@ class AudioClient():
 
         self.BEACON_FREQUENCY = 880
 
+        self.AudioEng = DetectAudioEngine()
+
 
     def drive(self, speed_l=0.1, speed_r=0.1):  # (m/sec, m/sec)
         """
@@ -175,7 +177,7 @@ class AudioClient():
 
     def callback_mics(self, data):
         # data for angular calculation
-        self.audio_event = AudioEng.process_data(data.data)
+        self.audio_event = self.AudioEng.process_data(data.data)
 
         # data for dynamic thresholding
         data_t = np.asarray(data.data, 'float32') * (1.0 / 32768.0)
@@ -191,7 +193,7 @@ class AudioClient():
             # when the buffer is full
             self.tmp = np.hstack((self.tmp[-10000:], np.abs(self.head_data)))
             # dynamic threshold is calculated and updated when new signal come
-            self.thresh = self.thresh_min + AudioEng.non_silence_thresh(self.tmp)
+            self.thresh = self.thresh_min + self.AudioEng.non_silence_thresh(self.tmp)
 
         # data for display
         data = np.asarray(data.data)
@@ -372,7 +374,7 @@ class AudioClient():
 if __name__ == "__main__":
 
     rospy.init_node("point_to_sound", anonymous=True)
-    AudioEng = DetectAudioEngine()
+    # self.AudioEng = DetectAudioEngine()
     main = AudioClient()
     #plt.show() # to stop signal display next run: comment this line and line 89(self.ani...)
     main.loop()
