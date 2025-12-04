@@ -149,6 +149,8 @@ class AudioClient():
         # miro_pub = mri.MiRoPublishers()
         # self.pub_cosmetic_joints(ear_left=1, ear_right=1)
 
+        self.BEACON_FREQUENCY = 880
+
 
     def drive(self, speed_l=0.1, speed_r=0.1):  # (m/sec, m/sec)
         """
@@ -179,6 +181,8 @@ class AudioClient():
         data_t = np.asarray(data.data, 'float32') * (1.0 / 32768.0)
         data_t = data_t.reshape((4, 500))    
         self.head_data = data_t[2][:]
+        self.detected_frequency = self.detect_frequency(data_t)
+
         if self.tmp is None:
             self.tmp = np.hstack((self.tmp, np.abs(self.head_data)))
         elif (len(self.tmp)<10500):
@@ -197,6 +201,21 @@ class AudioClient():
         self.input_mics = np.vstack((data, self.input_mics[:self.x_len-500,:]))
 
     
+    def detect_frequency(self, data):
+        left_ear = data[0]
+        MIC_SAMPLE_RATE = 20000
+        x = np.fft.rfft(left_ear)
+        freqs = np.fft.rfftfreq(len(left_ear), d=1.0/MIC_SAMPLE_RATE)
+
+        mag = np.abs(x)
+        peak = np.argmax(mag)
+        freq=freqs[peak]
+
+        print(freq)
+
+        return freq
+
+    
     def voice_accident(self):
         m = 0.00
         if self.audio_event != []:
@@ -207,7 +226,7 @@ class AudioClient():
                     #print("Azimuth: {:.2f}; Elevation: {:.2f}; Level : {:.2f}".format(ae.azim, ae.elev, ae.level))
                     self.frame = self.audio_event[1]
                     m = (self.audio_event[2][0]+self.audio_event[2][1])/2
-                    if m >= self.thresh:
+                    if m >= self.thresh and (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
                         self.status_code = 2
                     else:
                         self.status_code = 0
@@ -270,21 +289,21 @@ class AudioClient():
         self.status_code = 0
 
         # Check if can see ball yet
-        navigation = nav.MiRoClient()
-        for index in range(2):  # For each camera (0 = left, 1 = right)
-            # Skip if there's no new image, in case the network is choking
-            if not navigation.new_frame[index]:
-                continue
-            image = navigation.input_camera[index]
-            # Run the detect ball procedure
-            navigation.ball[index] = navigation.detect_ball(image, index)
+        # navigation = nav.MiRoClient()
+        # for index in range(2):  # For each camera (0 = left, 1 = right)
+        #     # Skip if there's no new image, in case the network is choking
+        #     if not navigation.new_frame[index]:
+        #         continue
+        #     image = navigation.input_camera[index]
+        #     # Run the detect ball procedure
+        #     navigation.ball[index] = navigation.detect_ball(image, index)
 
         # Obstacle avoidance
-        topic_root = "/" + os.getenv("MIRO_ROBOT_NAME")
-        avoidObstacle = avoid.ObstacleAvoidance(topic_root)
+        # topic_root = "/" + os.getenv("MIRO_ROBOT_NAME")
+        # avoidObstacle = avoid.ObstacleAvoidance(topic_root)
 
         # While no ball has been detected
-        while not rospy.core.is_shutdown() and not navigation.ball[0] and not navigation.ball[1]:
+        while not rospy.core.is_shutdown():# and not navigation.ball[0] and not navigation.ball[1]:
 
             # Step 1. sound event detection
             if self.status_code == 1:
@@ -298,10 +317,10 @@ class AudioClient():
 
             elif self.status_code == 3:
                 # Avoid obstacles while heading towards sound
-                avoiding, reasons = avoidObstacle.avoidance_required()
-                while avoiding and not rospy.core.is_shutdown():
-                    print(reasons)
-                    avoidObstacle.step(0.0, 0.0)
+                # avoiding, reasons = avoidObstacle.avoidance_required()
+                # while avoiding and not rospy.core.is_shutdown():
+                #     print(reasons)
+                #     avoidObstacle.step(0.0, 0.0)
                 self.forward()
                 self.voice_accident()
                 if self.status_code == 0:
