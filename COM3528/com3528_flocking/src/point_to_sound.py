@@ -34,8 +34,8 @@ from geometry_msgs.msg import Twist, TwistStamped
 import time
 
 import miro_ros_interface as mri
-import scripts.navigation as nav
-
+import navigation as nav
+import obstacle_avoidance as avoid
 
 
 try:  # For convenience, import this util separately
@@ -269,6 +269,7 @@ class AudioClient():
         # Listen to sound, turn to the sound source
         self.status_code = 0
 
+        # Check if can see ball yet
         navigation = nav.MiRoClient()
         for index in range(2):  # For each camera (0 = left, 1 = right)
             # Skip if there's no new image, in case the network is choking
@@ -277,6 +278,10 @@ class AudioClient():
             image = navigation.input_camera[index]
             # Run the detect ball procedure
             navigation.ball[index] = navigation.detect_ball(image, index)
+
+        # Obstacle avoidance
+        topic_root = "/" + os.getenv("MIRO_ROBOT_NAME")
+        avoidObstacle = avoid.ObstacleAvoidance(topic_root)
 
         # While no ball has been detected
         while not rospy.core.is_shutdown() and not navigation.ball[0] and not navigation.ball[1]:
@@ -292,6 +297,11 @@ class AudioClient():
                 self.audio_event=[]
 
             elif self.status_code == 3:
+                # Avoid obstacles while heading towards sound
+                avoiding, reasons = avoidObstacle.avoidance_required()
+                while avoiding and not rospy.core.is_shutdown():
+                    print(reasons)
+                    avoidObstacle.step(0.0, 0.0)
                 self.forward()
                 self.voice_accident()
                 if self.status_code == 0:

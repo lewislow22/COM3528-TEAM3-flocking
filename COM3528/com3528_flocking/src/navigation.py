@@ -29,7 +29,8 @@ try:  # For convenience, import this util separately
 except ImportError:
     from miro2.utils import wheel_speed2cmd_vel  # Python 2
 
-import src.point_to_sound as listen
+import point_to_sound as listen
+import obstacle_avoidance as avoid
 
 class MiRoClient:
     """
@@ -422,16 +423,28 @@ class MiRoClient:
         print("MiRo plays ball, press CTRL+C to halt...")
         # Main control loop iteration counter
         self.counter = 0
+        self.counter2 = 0
         # This switch loops through MiRo behaviours:
         # Find ball, lock on to the ball and kick ball
         self.status_code = 0
 
         listening = listen.AudioClient()
+        topic_root = "/" + os.getenv("MIRO_ROBOT_NAME")
+        avoidObstacle = avoid.ObstacleAvoidance(topic_root)
 
         while not rospy.core.is_shutdown():
 
-            # Step 1. Find ball
+            # Step 1. Look for food
             if self.status_code == 1:
+                # Avoid obstacles while exploring
+                avoiding, reasons = avoidObstacle.avoidance_required()
+                while avoiding and not rospy.core.is_shutdown():
+                    avoidObstacle.step(0.0, 0.0)
+                    if self.counter2 % 180 == 0:
+                        print(reasons)
+                    self.counter2 += 1
+                    rospy.sleep(self.TICK)
+                    
                 # Every once in a while, look for ball
                 if self.counter % self.CAM_FREQ == 0:
                     self.look_for_ball()
@@ -440,11 +453,11 @@ class MiRoClient:
                 if listening.status_code == 2:
                     listening.loop()
 
-            # Step 2. Orient towards it
+            # Step 2. Orient towards food
             elif self.status_code == 2:
                 self.lock_onto_ball()
 
-            # Step 3. Kick!
+            # Step 3. Move towards
             elif self.status_code == 3:
                 self.kick()
 
