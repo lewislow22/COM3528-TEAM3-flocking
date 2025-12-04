@@ -29,6 +29,8 @@ try:  # For convenience, import this util separately
 except ImportError:
     from miro2.utils import wheel_speed2cmd_vel  # Python 2
 
+import src.point_to_sound as listen
+
 class MiRoClient:
     """
     Script settings below
@@ -423,6 +425,9 @@ class MiRoClient:
         # This switch loops through MiRo behaviours:
         # Find ball, lock on to the ball and kick ball
         self.status_code = 0
+
+        listening = listen.AudioClient()
+
         while not rospy.core.is_shutdown():
 
             # Step 1. Find ball
@@ -430,6 +435,10 @@ class MiRoClient:
                 # Every once in a while, look for ball
                 if self.counter % self.CAM_FREQ == 0:
                     self.look_for_ball()
+                # If noise detected, start noise following loop
+                listening.voice_accident()
+                if listening.status_code == 2:
+                    listening.loop()
 
             # Step 2. Orient towards it
             elif self.status_code == 2:

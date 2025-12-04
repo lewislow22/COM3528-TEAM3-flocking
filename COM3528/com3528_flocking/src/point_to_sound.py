@@ -34,6 +34,7 @@ from geometry_msgs.msg import Twist, TwistStamped
 import time
 
 import miro_ros_interface as mri
+import scripts.navigation as nav
 
 
 
@@ -267,11 +268,21 @@ class AudioClient():
         # This switch loops through MiRo behaviours:
         # Listen to sound, turn to the sound source
         self.status_code = 0
-        while not rospy.core.is_shutdown():
+
+        navigation = nav.MiRoClient()
+        for index in range(2):  # For each camera (0 = left, 1 = right)
+            # Skip if there's no new image, in case the network is choking
+            if not navigation.new_frame[index]:
+                continue
+            image = navigation.input_camera[index]
+            # Run the detect ball procedure
+            navigation.ball[index] = navigation.detect_ball(image, index)
+
+        # While no ball has been detected
+        while not rospy.core.is_shutdown() and not navigation.ball[0] and not navigation.ball[1]:
 
             # Step 1. sound event detection
             if self.status_code == 1:
-                # Every once in a while, look for ball
                self.voice_accident()
 
             # Step 2. Orient towards it
