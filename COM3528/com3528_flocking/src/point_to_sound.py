@@ -46,7 +46,9 @@ except ImportError:
 
 class AudioClient():
    
-    def __init__(self):       
+    def __init__(self,navigator=False):
+        self.navigator = navigator
+        self.AudioEng = DetectAudioEngine()    
         #Microphone Parameters
         # Number of points to display
         self.x_len = 40000
@@ -173,7 +175,7 @@ class AudioClient():
 
     def callback_mics(self, data):
         # data for angular calculation
-        self.audio_event = AudioEng.process_data(data.data)
+        self.audio_event = self.AudioEng.process_data(data.data)
 
         # data for dynamic thresholding
         data_t = np.asarray(data.data, 'float32') * (1.0 / 32768.0)
@@ -187,7 +189,7 @@ class AudioClient():
             # when the buffer is full
             self.tmp = np.hstack((self.tmp[-10000:], np.abs(self.head_data)))
             # dynamic threshold is calculated and updated when new signal come
-            self.thresh = self.thresh_min + AudioEng.non_silence_thresh(self.tmp)
+            self.thresh = self.thresh_min + self.AudioEng.non_silence_thresh(self.tmp)
 
         # data for display
         data = np.asarray(data.data)
@@ -270,7 +272,10 @@ class AudioClient():
         self.status_code = 0
 
         # Check if can see ball yet
-        navigation = nav.MiRoClient()
+        if self.navigator == False:
+            navigation = nav.MiRoClient(main)
+        else:
+            navigation = self.navigator
         for index in range(2):  # For each camera (0 = left, 1 = right)
             # Skip if there's no new image, in case the network is choking
             if not navigation.new_frame[index]:
@@ -297,11 +302,14 @@ class AudioClient():
                 self.audio_event=[]
 
             elif self.status_code == 3:
-                # Avoid obstacles while heading towards sound
-                avoiding, reasons = avoidObstacle.avoidance_required()
-                while avoiding and not rospy.core.is_shutdown():
-                    print(reasons)
-                    avoidObstacle.step(0.0, 0.0)
+                # Avoid obstacles while exploring
+                # avoiding, reasons = avoidObstacle.avoidance_required()
+                # while avoiding and not rospy.core.is_shutdown():
+                #     avoidObstacle.step(0.0, 0.0)
+                #     if self.counter2 % 180 == 0:
+                #         print(reasons)
+                #     self.counter2 += 1
+                #     rospy.sleep(self.TICK)
                 self.forward()
                 self.voice_accident()
                 if self.status_code == 0:
@@ -353,7 +361,6 @@ class AudioClient():
 if __name__ == "__main__":
 
     rospy.init_node("point_to_sound", anonymous=True)
-    AudioEng = DetectAudioEngine()
     main = AudioClient()
     #plt.show() # to stop signal display next run: comment this line and line 89(self.ani...)
     main.loop()

@@ -31,6 +31,7 @@ except ImportError:
 
 import point_to_sound as listen
 import obstacle_avoidance as avoid
+import miro_ros_interface as mri
 
 class MiRoClient:
     """
@@ -365,12 +366,20 @@ class MiRoClient:
                 self.status_code = 0
                 self.just_switched = True
         else:
-            # Already kicked, just stay stopped
+            # FOUND THE FOOD!!????
             self.drive(0.0, 0.0)
+            while not rospy.core.is_shutdown():
+                for i in range (0,3):
+                    miro_pub.pub_tone(frequency=880, volume=100, duration=3)
+                    rospy.sleep(0.2)
+                    miro_pub.pub_tone(frequency=0, volume=0, duration=3)
+                    rospy.sleep(0.2)
+                rospy.sleep(3)
 
-    def __init__(self):
+    def __init__(self,listen=False):
+        self.listen = listen
         # Initialise a new ROS node to communicate with MiRo, if needed
-        if not self.IS_MIROCODE:
+        if not self.IS_MIROCODE and listen==False:
             rospy.init_node("kick_blue_ball", anonymous=True)
         # Give it some time to make sure everything is initialised
         rospy.sleep(2.0)
@@ -427,8 +436,11 @@ class MiRoClient:
         # This switch loops through MiRo behaviours:
         # Find ball, lock on to the ball and kick ball
         self.status_code = 0
-
-        listening = listen.AudioClient()
+        
+        if self.listen == False:
+            listening = listen.AudioClient(main)
+        else:
+            listening = self.listen
         topic_root = "/" + os.getenv("MIRO_ROBOT_NAME")
         avoidObstacle = avoid.ObstacleAvoidance(topic_root)
 
@@ -436,14 +448,14 @@ class MiRoClient:
 
             # Step 1. Look for food
             if self.status_code == 1:
-                # Avoid obstacles while exploring
-                avoiding, reasons = avoidObstacle.avoidance_required()
-                while avoiding and not rospy.core.is_shutdown():
-                    avoidObstacle.step(0.0, 0.0)
-                    if self.counter2 % 180 == 0:
-                        print(reasons)
-                    self.counter2 += 1
-                    rospy.sleep(self.TICK)
+                # # Avoid obstacles while exploring
+                # avoiding, reasons = avoidObstacle.avoidance_required()
+                # while avoiding and not rospy.core.is_shutdown():
+                #     avoidObstacle.step(0.0, 0.0)
+                #     if self.counter2 % 180 == 0:
+                #         print(reasons)
+                #     self.counter2 += 1
+                #     rospy.sleep(self.TICK)
                     
                 # Every once in a while, look for ball
                 if self.counter % self.CAM_FREQ == 0:
@@ -473,4 +485,5 @@ class MiRoClient:
 # This condition fires when the script is called directly
 if __name__ == "__main__":
     main = MiRoClient()  # Instantiate class
+    miro_pub = mri.MiRoPublishers(True)
     main.loop()  # Run the main control loop

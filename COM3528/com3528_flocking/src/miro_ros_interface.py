@@ -22,10 +22,10 @@ import rospy
 
 
 class MiRo:
-	def __init__(self):
+	def __init__(self,navigation=False):
 		name = 'MiRo_ROS_interface'
 		# Initialise ROS node ('disable_rostime=True' needed to work in PyCharm)
-		if name not in rosnode.get_node_names():
+		if name not in rosnode.get_node_names() and navigation==False:
 			rospy.init_node(name, anonymous=True, disable_rostime="PYCHARM_HOSTED" in os.environ)
 			
 		# ROS topic root
@@ -244,9 +244,9 @@ class MiRoSensors(MiRo):
 
 
 class MiRoPublishers(MiRo):
-	def __init__(self):
+	def __init__(self,navigation=False):
 		# TODO: Use super() when moving to Python 3
-		MiRo.__init__(self)
+		MiRo.__init__(self,navigation)
 
 		# Topics
 		self.cmd_vel = rospy.Publisher(self.tr + 'control/cmd_vel', TwistStamped, queue_size=self.qs)
