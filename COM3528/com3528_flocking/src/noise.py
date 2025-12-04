@@ -9,7 +9,12 @@ miro_pub = mri.MiRoPublishers()
 # This condition fires when the script is called directly
 if __name__ == "__main__":
     while not rospy.core.is_shutdown():
-    miro_pub.pub_tone(frequency=800, volume=100, duration=3)
-    rospy.sleep(0.2)
-    miro_pub.pub_tone(frequency=200, volume=0, duration=3)
-    rospy.sleep(3)
+        for i in range (0,3):
+            miro_pub.pub_tone(frequency=880, volume=100, duration=3)
+            rospy.sleep(0.2)
+            miro_pub.pub_tone(frequency=0, volume=0, duration=3)
+            rospy.sleep(0.2)
+
+        rospy.sleep(3)
+
+# miro_pub.pub_cosmetic_joints(ear_left=1, ear_right=1)
