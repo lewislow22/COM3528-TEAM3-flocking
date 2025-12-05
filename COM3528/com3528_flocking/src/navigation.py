@@ -84,9 +84,9 @@ class MiRoClient:
         self.kin_joints.name = ["tilt", "lift", "yaw", "pitch"]
         self.kin_joints.position = [0.0, radians(60.0), 0.0, radians(-22)]
 
-        self.cosmetic_joints = JointState()
-        self.cosmetic_joints.name = ["Ear1","Ear2"]
-        self.kin_joints.position = [1,1]
+        # self.cosmetic_joints = JointState()
+        # self.cosmetic_joints.name = ["Ear1","Ear2"]
+        # self.kin_joints.position = [1,1]git 
 
         t = 0
         while not rospy.core.is_shutdown():  # Check ROS is running
@@ -140,8 +140,9 @@ class MiRoClient:
             # Get image dimensions
             self.frame_height, self.frame_width, channels = image.shape
             cropped_image = image[int(self.frame_height/5)*3:self.frame_height,0:self.frame_width]
+            self.frame_height, self.frame_width, channels = cropped_image.shape
             self.x_centre = self.frame_width / 2.0
-            self.y_centre = self.frame_height / 5.0
+            self.y_centre = self.frame_height / 2.0
             # cv2.imshow("woop1",image)
             # cv2.imshow("woop",cropped_image)
             # cv2.waitKey(0)
