@@ -55,8 +55,8 @@ class MiRoClient:
     # color segmentation format
     HSV = True  # if true select a color which will convert to hsv format with a range of its own, else you can select your own rgb range
     f = lambda x: int(0) if (x < 0) else (int(255) if x > 255 else int(x))
-    COLOR_HSV = [f(255), f(0), f(0)]     # target color which will be converted to hsv for processing, format BGR
-    COLOR_LOW = (f(180), f(0), f(0))         # low color segment, format BGR
+    COLOR_HSV = [f(0), f(255), f(0)]     # target color which will be converted to hsv for processing, format BGR
+    COLOR_LOW = (f(0), f(180), f(0))         # low color segment, format BGR
     COLOR_HIGH = (f(255), f(255), f(255))  # high color segment, format BGR
 
     # edge detection format
@@ -82,7 +82,7 @@ class MiRoClient:
         """
         self.kin_joints = JointState()  # Prepare the empty message
         self.kin_joints.name = ["tilt", "lift", "yaw", "pitch"]
-        self.kin_joints.position = [0.0, radians(34.0), 0.0, 0.0]
+        self.kin_joints.position = [0.0, radians(60.0), 0.0, -17]
         t = 0
         while not rospy.core.is_shutdown():  # Check ROS is running
             # Publish state to neck servos for 1 sec
@@ -350,22 +350,10 @@ class MiRoClient:
         """
         if not hasattr(self, 'has_kicked'):
             self.has_kicked = False  # Initialize kick flag
+        if not hasattr(self, 'kick_count'):
+            self.kick_count = 0
 
-        # Only perform kick if not done yet
-        if not self.has_kicked:
-            if self.just_switched:
-                print("MiRo is kicking the ball!")
-                self.just_switched = False
-
-            if self.counter <= self.bookmark + 2 / self.TICK and not self.TRANSLATION_ONLY:
-                self.drive(self.FAST, self.FAST)  # Move forward to kick
-            else:
-                self.drive(0.0, 0.0)  # Stop after kick
-                self.has_kicked = True  # Record that we kicked once
-                print("Kick complete — MiRo stopped.")
-                self.status_code = 0
-                self.just_switched = True
-        else:
+        if self.has_kicked:
             # FOUND THE FOOD!!????
             self.drive(0.0, 0.0)
             while not rospy.core.is_shutdown():
@@ -375,6 +363,27 @@ class MiRoClient:
                     miro_pub.pub_tone(frequency=0, volume=0, duration=3)
                     rospy.sleep(0.2)
                 rospy.sleep(3)
+            return
+        
+        if self.just_switched:
+                print("MiRo is kicking the ball!")
+                self.just_switched = False
+
+        if self.counter <= self.bookmark + 2 / self.TICK and not self.TRANSLATION_ONLY:
+            self.drive(self.FAST, self.FAST)  # Move forward to kick
+        else:
+            self.drive(0.0, 0.0)
+            if self.kick_count < 2 and (self.counter > self.bookmark + 2 / self.TICK):
+                self.kick_count += 1
+
+                if self.kick_count >= 2:
+                    self.has_kicked = True
+                    print("Found the food")
+
+                if not self.has_kicked:
+                    self.status_code = 0
+
+                self.just_switched = True
 
     def __init__(self,listen=False):
         self.listen = listen
@@ -422,6 +431,8 @@ class MiRoClient:
         self.just_switched = True
         # Bookmark
         self.bookmark = 0
+        #Track Miro distance to food
+        self.kick_count = 0
         # Move the head to default pose
         self.reset_head_pose()
 
