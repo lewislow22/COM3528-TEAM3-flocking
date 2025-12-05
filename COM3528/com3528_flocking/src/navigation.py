@@ -188,8 +188,8 @@ class MiRoClient:
                     # Extract colour boundaries for masking image
                     # Get the hue value from the numpy array containing target colour
                     target_hue = hsv_colour[0, 0][0]
-                    hsv_lo_end = np.array([target_hue - 5, 70, 70])
-                    hsv_hi_end = np.array([target_hue + 5, 255, 255])
+                    hsv_lo_end = np.array([target_hue - 20, 70, 70])
+                    hsv_hi_end = np.array([target_hue + 20, 255, 255])
 
                     # Generate the mask based on the desired hue range
                     mask = cv2.inRange(im_hsv, hsv_lo_end, hsv_hi_end)
