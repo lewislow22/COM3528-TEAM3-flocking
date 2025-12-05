@@ -48,7 +48,7 @@ class AudioClient():
    
     def __init__(self,navigator=False):
         self.navigator = navigator
-        self.AudioEng = DetectAudioEngine()    
+        self.AudioEng = DetectAudioEngine()
         #Microphone Parameters
         # Number of points to display
         self.x_len = 40000
@@ -259,10 +259,19 @@ class AudioClient():
         
 
     def forward(self):
-        self.msg_wheels.twist.linear.x = 0.1
+        Tf = 3
+        T1=0
+        while(T1 <= Tf):
+            self.msg_wheels.twist.linear.x = 0.2
+            self.msg_wheels.twist.angular.z = 0
+            self.pub_wheels.publish(self.msg_wheels)
+            time.sleep(0.02)
+            T1+=0.02
+        
+        self.msg_wheels.twist.linear.x = 0.0
         self.msg_wheels.twist.angular.z = 0
         self.pub_wheels.publish(self.msg_wheels)
-
+        self.status_code = 0
 
     def loop(self):
         msg_wheels = TwistStamped()
@@ -291,6 +300,15 @@ class AudioClient():
         # While no ball has been detected
         while not rospy.core.is_shutdown() and not navigation.ball[0] and not navigation.ball[1]:
 
+            # Step 0. Check for visible food
+            for index in range(2):  # For each camera (0 = left, 1 = right)
+                # Skip if there's no new image, in case the network is choking
+                if not navigation.new_frame[index]:
+                    continue
+                image = navigation.input_camera[index]
+                # Run the detect ball procedure
+                navigation.ball[index] = navigation.detect_ball(image, index)
+
             # Step 1. sound event detection
             if self.status_code == 1:
                self.voice_accident()
@@ -311,9 +329,10 @@ class AudioClient():
                 #     self.counter2 += 1
                 #     rospy.sleep(self.TICK)
                 self.forward()
+                # print("status code 3")
                 self.voice_accident()
-                if self.status_code == 0:
-                    self.status_code = 3
+                # if self.status_code == 0:
+                #     self.status_code = 3
 
             # Fall back
             else:
