@@ -56,8 +56,8 @@ class MiRoClient:
     HSV = True  # if true select a color which will convert to hsv format with a range of its own, else you can select your own rgb range
     f = lambda x: int(0) if (x < 0) else (int(255) if x > 255 else int(x))
     COLOR_HSV = [f(0), f(255), f(0)]     # target color which will be converted to hsv for processing, format BGR
-    COLOR_LOW = (f(0), f(180), f(0))         # low color segment, format BGR
-    COLOR_HIGH = (f(255), f(255), f(255))  # high color segment, format BGR
+    COLOR_LOW = (f(166), f(152), f(83))         # low color segment, format BGR
+    COLOR_HIGH = (f(149), f(255), f(0))  # high color segment, format BGR
 
     # edge detection format
     INTENSITY_LOW = 50   # min 0, max 500
@@ -82,7 +82,12 @@ class MiRoClient:
         """
         self.kin_joints = JointState()  # Prepare the empty message
         self.kin_joints.name = ["tilt", "lift", "yaw", "pitch"]
-        self.kin_joints.position = [0.0, radians(60.0), 0.0, -17]
+        self.kin_joints.position = [0.0, radians(60.0), 0.0, radians(-22)]
+
+        self.cosmetic_joints = JointState()
+        self.cosmetic_joints.name = ["Ear1","Ear2"]
+        self.kin_joints.position = [1,1]
+
         t = 0
         while not rospy.core.is_shutdown():  # Check ROS is running
             # Publish state to neck servos for 1 sec
@@ -132,12 +137,18 @@ class MiRoClient:
             image = self.image_converter.compressed_imgmsg_to_cv2(ros_image, "rgb8")
             # Convert from OpenCV's default BGR to RGB
             image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            # Store image as class attribute for further use
-            self.input_camera[index] = image
             # Get image dimensions
             self.frame_height, self.frame_width, channels = image.shape
+            cropped_image = image[int(self.frame_height/5)*3:self.frame_height,0:self.frame_width]
             self.x_centre = self.frame_width / 2.0
-            self.y_centre = self.frame_height / 2.0
+            self.y_centre = self.frame_height / 5.0
+            # cv2.imshow("woop1",image)
+            # cv2.imshow("woop",cropped_image)
+            # cv2.waitKey(0)
+
+            # Store image as class attribute for further use
+            self.input_camera[index] = cropped_image
+            
             # Raise the flag: A new frame is available for processing
             self.new_frame[index] = True
         except CvBridgeError as e:
@@ -176,8 +187,8 @@ class MiRoClient:
                     # Extract colour boundaries for masking image
                     # Get the hue value from the numpy array containing target colour
                     target_hue = hsv_colour[0, 0][0]
-                    hsv_lo_end = np.array([target_hue - 20, 70, 70])
-                    hsv_hi_end = np.array([target_hue + 20, 255, 255])
+                    hsv_lo_end = np.array([target_hue - 5, 70, 70])
+                    hsv_hi_end = np.array([target_hue + 5, 255, 255])
 
                     # Generate the mask based on the desired hue range
                     mask = cv2.inRange(im_hsv, hsv_lo_end, hsv_hi_end)
