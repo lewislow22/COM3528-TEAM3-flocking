@@ -84,14 +84,11 @@ class MiRoClient:
         self.kin_joints.name = ["tilt", "lift", "yaw", "pitch"]
         self.kin_joints.position = [0.0, radians(60.0), 0.0, radians(-22)]
 
-        # self.cosmetic_joints = JointState()
-        # self.cosmetic_joints.name = ["Ear1","Ear2"]
-        # self.kin_joints.position = [1,1]git 
-
         t = 0
         while not rospy.core.is_shutdown():  # Check ROS is running
             # Publish state to neck servos for 1 sec
             self.pub_kin.publish(self.kin_joints)
+            miro_pub.pub_cosmetic_joints(ear_left=1,ear_right=1)
             rospy.sleep(self.TICK)
             t += self.TICK
             if t > 1:
