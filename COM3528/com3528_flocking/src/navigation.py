@@ -55,8 +55,8 @@ class MiRoClient:
     # color segmentation format
     HSV = True  # if true select a color which will convert to hsv format with a range of its own, else you can select your own rgb range
     f = lambda x: int(0) if (x < 0) else (int(255) if x > 255 else int(x))
-    COLOR_HSV = [f(255), f(0), f(0)]     # target color which will be converted to hsv for processing, format BGR
-    COLOR_LOW = (f(180), f(0), f(0))         # low color segment, format BGR
+    COLOR_HSV = [f(0), f(255), f(0)]     # target color which will be converted to hsv for processing, format BGR
+    COLOR_LOW = (f(0), f(180), f(0))         # low color segment, format BGR
     COLOR_HIGH = (f(255), f(255), f(255))  # high color segment, format BGR
 
     # edge detection format
