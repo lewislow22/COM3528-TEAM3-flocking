@@ -1,0 +1,3 @@
+<launch>
+  <node pkg="com3528_flocking" type="navigation.py" name="navigation" output="screen"/>
+</launch>

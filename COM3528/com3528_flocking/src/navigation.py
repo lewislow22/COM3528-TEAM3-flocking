@@ -504,6 +504,6 @@ class MiRoClient:
 
 # This condition fires when the script is called directly
 if __name__ == "__main__":
-    main = MiRoClient()  # Instantiate class
     miro_pub = mri.MiRoPublishers(True)
+    main = MiRoClient()  # Instantiate class
     main.loop()  # Run the main control loop
