@@ -219,29 +219,11 @@ class AudioClient():
         peak = np.argmax(mag)
         freq=freqs[peak]
 
-        m = 0.00
-        # print(freq)
-        # print(self.audio_event)
-        # print("status",self.status_code)
-        if self.audio_event != []:
-            if self.audio_event != None:
-                if self.audio_event[0] != None:
-                    ae = self.audio_event[0]
-                    #print(self.audio_event[2])
-                    #print("Azimuth: {:.2f}; Elevation: {:.2f}; Level : {:.2f}".format(ae.azim, ae.elev, ae.level))
-                    self.frame = self.audio_event[1]
-                    m = (self.audio_event[2][0]+self.audio_event[2][1])/2
-                    # if m >= self.thresh:# and (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
-                    if (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
-                        print("yessdafsghnfsgfad\ SHould be turn")
-
         return freq
 
     
     def voice_accident(self):
         m = 0.00
-        # print("len ",self.audio_event)
-        # print("freq ", self.detected_frequency)
         if self.audio_event != []:
             if self.audio_event != None:
                 if self.audio_event[0] != None:
@@ -253,10 +235,8 @@ class AudioClient():
                     # if m >= self.thresh:# and (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
                     if (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
                         self.status_code = 2
-                        # self.sound_heard = True
                         self.last_loudness = self.current_loudness
                         self.current_loudness = (self.audio_event[2][0]+self.audio_event[2][1])/2
-                        # print("loud? ",self.audio_event[2])
                         print("SHould be turn")
                     else:
                         self.status_code = 0
@@ -307,12 +287,9 @@ class AudioClient():
         self.pub_wheels.publish(self.msg_wheels)
         self.status_code = 3
 
-        #TODO
-        # self.sound_heard = False
         
 
     def forward(self):
-        # if self.sound_heard == False:
         Tf = 3
         T1=0
         while(T1 <= Tf):
