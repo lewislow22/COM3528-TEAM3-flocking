@@ -20,6 +20,7 @@ The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
 """
 
+from math import radians
 import os
 import numpy as np
 import rospy
@@ -155,8 +156,9 @@ class AudioClient():
 
         self.detected_frequency = 0
         
-        # self.sound_heard = False
-        self.going_forward = False
+        
+        self.last_loudness = 0.0
+        self.current_loudness = 0.0
 
     def drive(self, speed_l=0.1, speed_r=0.1):  # (m/sec, m/sec)
         """
@@ -218,9 +220,9 @@ class AudioClient():
         freq=freqs[peak]
 
         m = 0.00
-        print(freq)
+        # print(freq)
         # print(self.audio_event)
-        print("status",self.status_code)
+        # print("status",self.status_code)
         if self.audio_event != []:
             if self.audio_event != None:
                 if self.audio_event[0] != None:
@@ -248,11 +250,13 @@ class AudioClient():
                     #print("Azimuth: {:.2f}; Elevation: {:.2f}; Level : {:.2f}".format(ae.azim, ae.elev, ae.level))
                     self.frame = self.audio_event[1]
                     m = (self.audio_event[2][0]+self.audio_event[2][1])/2
-                    print("m ",m)
                     # if m >= self.thresh:# and (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
                     if (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
                         self.status_code = 2
                         # self.sound_heard = True
+                        self.last_loudness = self.current_loudness
+                        self.current_loudness = (self.audio_event[2][0]+self.audio_event[2][1])/2
+                        # print("loud? ",self.audio_event[2])
                         print("SHould be turn")
                     else:
                         self.status_code = 0
@@ -322,6 +326,27 @@ class AudioClient():
         self.pub_wheels.publish(self.msg_wheels)
         self.status_code = 0
 
+    def check_loudness(self):
+        m = (self.audio_event[2][0]+self.audio_event[2][1])/2
+        print("fjsgtbrhdf",(self.last_loudness - self.current_loudness),self.last_loudness, self.current_loudness)
+        if self.last_loudness - self.current_loudness > 0.01:
+            print("18000000")
+            Tf = 2
+            T1=0
+            while(T1 <= Tf):
+
+                #self.drive(v*2,v*2)
+                self.msg_wheels.twist.linear.x = 0.0
+                self.msg_wheels.twist.angular.z = radians(180)/2
+
+                self.pub_wheels.publish(self.msg_wheels)
+                time.sleep(0.02)
+                T1+=0.02
+            
+            self.msg_wheels.twist.linear.x = 0.0
+            self.msg_wheels.twist.angular.z = 0
+            self.pub_wheels.publish(self.msg_wheels)
+
 
     def loop(self):
         msg_wheels = TwistStamped()
@@ -366,6 +391,7 @@ class AudioClient():
                 #     avoidObstacle.step(0.0, 0.0)
 
                 self.forward()
+                self.check_loudness()
                 self.voice_accident()
                 # if self.status_code == 0:
                 #     self.status_code = 3
