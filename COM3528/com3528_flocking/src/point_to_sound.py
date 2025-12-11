@@ -155,7 +155,7 @@ class AudioClient():
 
         self.detected_frequency = 0
         
-        self.sound_heard = False
+        # self.sound_heard = False
         self.going_forward = False
 
     def drive(self, speed_l=0.1, speed_r=0.1):  # (m/sec, m/sec)
@@ -248,10 +248,11 @@ class AudioClient():
                     #print("Azimuth: {:.2f}; Elevation: {:.2f}; Level : {:.2f}".format(ae.azim, ae.elev, ae.level))
                     self.frame = self.audio_event[1]
                     m = (self.audio_event[2][0]+self.audio_event[2][1])/2
+                    print("m ",m)
                     # if m >= self.thresh:# and (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
                     if (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
                         self.status_code = 2
-                        self.sound_heard = True
+                        # self.sound_heard = True
                         print("SHould be turn")
                     else:
                         self.status_code = 0
@@ -297,18 +298,29 @@ class AudioClient():
             time.sleep(0.02)
             T1+=0.02
         
+        self.msg_wheels.twist.linear.x = 0.0
         self.msg_wheels.twist.angular.z = 0
         self.pub_wheels.publish(self.msg_wheels)
         self.status_code = 3
 
+        #TODO
         # self.sound_heard = False
         
 
     def forward(self):
-        if self.sound_heard == False:
+        # if self.sound_heard == False:
+        Tf = 3
+        T1=0
+        while(T1 <= Tf):
             self.msg_wheels.twist.linear.x = 0.1
-            # self.msg_wheels.twist.angular.z = 0
+            self.msg_wheels.twist.angular.z = 0
             self.pub_wheels.publish(self.msg_wheels)
+            time.sleep(0.02)
+            T1+=0.02
+        self.msg_wheels.twist.linear.x = 0.0
+        self.msg_wheels.twist.angular.z = 0
+        self.pub_wheels.publish(self.msg_wheels)
+        self.status_code = 0
 
 
     def loop(self):
@@ -355,8 +367,8 @@ class AudioClient():
 
                 self.forward()
                 self.voice_accident()
-                if self.status_code == 0:
-                    self.status_code = 3
+                # if self.status_code == 0:
+                #     self.status_code = 3
                 # elsif se
 
             # Fall back
