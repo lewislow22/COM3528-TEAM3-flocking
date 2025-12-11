@@ -471,7 +471,7 @@ class DetectAudioEngine():
 		event_head = None
 
 		# process any pending event
-		if self.level:
+		if self.level:# or self.detect_frequency(data)==880:
 
 			# adjust for configuration of robot right now
 			self.process_configuration()
@@ -483,5 +483,33 @@ class DetectAudioEngine():
 		# return
 		return (event, event_head, sound_level)
 
+
+	# def detect_frequency(self, data):
+	# 	left_ear = data[0]
+	# 	MIC_SAMPLE_RATE = 20000
+	# 	x = np.fft.rfft(left_ear)
+	# 	freqs = np.fft.rfftfreq(len(left_ear), d=1.0/MIC_SAMPLE_RATE)
+
+	# 	mag = np.abs(x)
+	# 	peak = np.argmax(mag)
+	# 	freq=freqs[peak]
+
+	# 	# m = 0.00
+	# 	# print(freq)
+	# 	# print(self.audio_event)
+	# 	# print("status",self.status_code)
+	# 	# if self.audio_event != []:
+	# 	# 	if self.audio_event != None:
+	# 	# 		if self.audio_event[0] != None:
+	# 	# 			ae = self.audio_event[0]
+	# 	# 			#print(self.audio_event[2])
+	# 	# 			#print("Azimuth: {:.2f}; Elevation: {:.2f}; Level : {:.2f}".format(ae.azim, ae.elev, ae.level))
+	# 	# 			self.frame = self.audio_event[1]
+	# 	# 			m = (self.audio_event[2][0]+self.audio_event[2][1])/2
+	# 	# 			# if m >= self.thresh:# and (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
+	# 	# 			if (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
+	# 	# 				print("yessdafsghnfsgfad\ SHould be turn")
+
+	# 	return freq
 
 

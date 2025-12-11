@@ -153,6 +153,10 @@ class AudioClient():
 
         self.AudioEng = DetectAudioEngine()
 
+        self.detected_frequency = 0
+        
+        self.sound_heard = False
+        self.going_forward = False
 
     def drive(self, speed_l=0.1, speed_r=0.1):  # (m/sec, m/sec)
         """
@@ -213,13 +217,10 @@ class AudioClient():
         peak = np.argmax(mag)
         freq=freqs[peak]
 
-        print(freq)
-
-        return freq
-
-    
-    def voice_accident(self):
         m = 0.00
+        print(freq)
+        # print(self.audio_event)
+        print("status",self.status_code)
         if self.audio_event != []:
             if self.audio_event != None:
                 if self.audio_event[0] != None:
@@ -228,8 +229,30 @@ class AudioClient():
                     #print("Azimuth: {:.2f}; Elevation: {:.2f}; Level : {:.2f}".format(ae.azim, ae.elev, ae.level))
                     self.frame = self.audio_event[1]
                     m = (self.audio_event[2][0]+self.audio_event[2][1])/2
-                    if m >= self.thresh and (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
+                    # if m >= self.thresh:# and (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
+                    if (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
+                        print("yessdafsghnfsgfad\ SHould be turn")
+
+        return freq
+
+    
+    def voice_accident(self):
+        m = 0.00
+        # print("len ",self.audio_event)
+        # print("freq ", self.detected_frequency)
+        if self.audio_event != []:
+            if self.audio_event != None:
+                if self.audio_event[0] != None:
+                    ae = self.audio_event[0]
+                    #print(self.audio_event[2])
+                    #print("Azimuth: {:.2f}; Elevation: {:.2f}; Level : {:.2f}".format(ae.azim, ae.elev, ae.level))
+                    self.frame = self.audio_event[1]
+                    m = (self.audio_event[2][0]+self.audio_event[2][1])/2
+                    # if m >= self.thresh:# and (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
+                    if (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
                         self.status_code = 2
+                        self.sound_heard = True
+                        print("SHould be turn")
                     else:
                         self.status_code = 0
                 else:
@@ -273,14 +296,19 @@ class AudioClient():
             self.pub_wheels.publish(self.msg_wheels)
             time.sleep(0.02)
             T1+=0.02
-
+        
+        self.msg_wheels.twist.angular.z = 0
+        self.pub_wheels.publish(self.msg_wheels)
         self.status_code = 3
+
+        # self.sound_heard = False
         
 
     def forward(self):
-        self.msg_wheels.twist.linear.x = 0.1
-        self.msg_wheels.twist.angular.z = 0
-        self.pub_wheels.publish(self.msg_wheels)
+        if self.sound_heard == False:
+            self.msg_wheels.twist.linear.x = 0.1
+            # self.msg_wheels.twist.angular.z = 0
+            self.pub_wheels.publish(self.msg_wheels)
 
 
     def loop(self):
@@ -309,7 +337,8 @@ class AudioClient():
 
             # Step 1. sound event detection
             if self.status_code == 1:
-               self.voice_accident()
+                # self.sound_heard = False
+                self.voice_accident()
 
             # Step 2. Orient towards it
             elif self.status_code == 2:
@@ -323,10 +352,12 @@ class AudioClient():
                 # while avoiding and not rospy.core.is_shutdown():
                 #     print(reasons)
                 #     avoidObstacle.step(0.0, 0.0)
+
                 self.forward()
                 self.voice_accident()
                 if self.status_code == 0:
                     self.status_code = 3
+                # elsif se
 
             # Fall back
             else:
