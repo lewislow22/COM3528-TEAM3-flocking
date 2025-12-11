@@ -367,7 +367,7 @@ class MiRoClient:
             self.drive(0.0, 0.0)
             while not rospy.core.is_shutdown():
                 for i in range (0,3):
-                    miro_pub.pub_tone(frequency=880, volume=100, duration=3)
+                    miro_pub.pub_tone(frequency=880, volume=255, duration=3)
                     rospy.sleep(0.2)
                     miro_pub.pub_tone(frequency=0, volume=0, duration=3)
                     rospy.sleep(0.2)
