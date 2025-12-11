@@ -20,6 +20,7 @@ The above copyright notice and this permission notice shall be included in all
 copies or substantial portions of the Software.
 """
 
+from math import radians
 import os
 import numpy as np
 import rospy
@@ -48,7 +49,6 @@ class AudioClient():
    
     def __init__(self,navigator=False):
         self.navigator = navigator
-        self.AudioEng = DetectAudioEngine()
         #Microphone Parameters
         # Number of points to display
         self.x_len = 40000
@@ -151,6 +151,15 @@ class AudioClient():
         # miro_pub = mri.MiRoPublishers()
         # self.pub_cosmetic_joints(ear_left=1, ear_right=1)
 
+        self.BEACON_FREQUENCY = 880
+
+        self.AudioEng = DetectAudioEngine()
+
+        self.detected_frequency = 0
+        
+        
+        self.last_loudness = 0.0
+        self.current_loudness = 0.0
 
     def drive(self, speed_l=0.1, speed_r=0.1):  # (m/sec, m/sec)
         """
@@ -181,6 +190,8 @@ class AudioClient():
         data_t = np.asarray(data.data, 'float32') * (1.0 / 32768.0)
         data_t = data_t.reshape((4, 500))    
         self.head_data = data_t[2][:]
+        self.detected_frequency = self.detect_frequency(data_t)
+
         if self.tmp is None:
             self.tmp = np.hstack((self.tmp, np.abs(self.head_data)))
         elif (len(self.tmp)<10500):
@@ -199,6 +210,19 @@ class AudioClient():
         self.input_mics = np.vstack((data, self.input_mics[:self.x_len-500,:]))
 
     
+    def detect_frequency(self, data):
+        left_ear = data[0]
+        MIC_SAMPLE_RATE = 20000
+        x = np.fft.rfft(left_ear)
+        freqs = np.fft.rfftfreq(len(left_ear), d=1.0/MIC_SAMPLE_RATE)
+
+        mag = np.abs(x)
+        peak = np.argmax(mag)
+        freq=freqs[peak]
+
+        return freq
+
+    
     def voice_accident(self):
         m = 0.00
         if self.audio_event != []:
@@ -209,8 +233,12 @@ class AudioClient():
                     #print("Azimuth: {:.2f}; Elevation: {:.2f}; Level : {:.2f}".format(ae.azim, ae.elev, ae.level))
                     self.frame = self.audio_event[1]
                     m = (self.audio_event[2][0]+self.audio_event[2][1])/2
-                    if m >= self.thresh:
+                    # if m >= self.thresh:# and (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
+                    if (self.BEACON_FREQUENCY >= self.detected_frequency - 20 and self.BEACON_FREQUENCY <= self.detected_frequency + 20):
                         self.status_code = 2
+                        self.last_loudness = self.current_loudness
+                        self.current_loudness = (self.audio_event[2][0]+self.audio_event[2][1])/2
+                        print("SHould be turn")
                     else:
                         self.status_code = 0
                 else:
@@ -254,24 +282,49 @@ class AudioClient():
             self.pub_wheels.publish(self.msg_wheels)
             time.sleep(0.02)
             T1+=0.02
-
+        
+        self.msg_wheels.twist.linear.x = 0.0
+        self.msg_wheels.twist.angular.z = 0
+        self.pub_wheels.publish(self.msg_wheels)
         self.status_code = 3
+
         
 
     def forward(self):
         Tf = 3
         T1=0
         while(T1 <= Tf):
-            self.msg_wheels.twist.linear.x = 0.2
+            self.msg_wheels.twist.linear.x = 0.1
             self.msg_wheels.twist.angular.z = 0
             self.pub_wheels.publish(self.msg_wheels)
             time.sleep(0.02)
             T1+=0.02
-        
         self.msg_wheels.twist.linear.x = 0.0
         self.msg_wheels.twist.angular.z = 0
         self.pub_wheels.publish(self.msg_wheels)
         self.status_code = 0
+
+    def check_loudness(self):
+        m = (self.audio_event[2][0]+self.audio_event[2][1])/2
+        print("fjsgtbrhdf",(self.last_loudness - self.current_loudness),self.last_loudness, self.current_loudness)
+        if self.last_loudness - self.current_loudness > 0.01:
+            print("18000000")
+            Tf = 2
+            T1=0
+            while(T1 <= Tf):
+
+                #self.drive(v*2,v*2)
+                self.msg_wheels.twist.linear.x = 0.0
+                self.msg_wheels.twist.angular.z = radians(180)/2
+
+                self.pub_wheels.publish(self.msg_wheels)
+                time.sleep(0.02)
+                T1+=0.02
+            
+            self.msg_wheels.twist.linear.x = 0.0
+            self.msg_wheels.twist.angular.z = 0
+            self.pub_wheels.publish(self.msg_wheels)
+
 
     def loop(self):
         msg_wheels = TwistStamped()
@@ -294,8 +347,8 @@ class AudioClient():
             navigation.ball[index] = navigation.detect_ball(image, index)
 
         # Obstacle avoidance
-        topic_root = "/" + os.getenv("MIRO_ROBOT_NAME")
-        avoidObstacle = avoid.ObstacleAvoidance(topic_root)
+        # topic_root = "/" + os.getenv("MIRO_ROBOT_NAME")
+        # avoidObstacle = avoid.ObstacleAvoidance(topic_root)
 
         # While no ball has been detected
         while not rospy.core.is_shutdown() and not navigation.ball[0] and not navigation.ball[1]:
@@ -311,7 +364,8 @@ class AudioClient():
 
             # Step 1. sound event detection
             if self.status_code == 1:
-               self.voice_accident()
+                # self.sound_heard = False
+                self.voice_accident()
 
             # Step 2. Orient towards it
             elif self.status_code == 2:
@@ -329,10 +383,11 @@ class AudioClient():
                 #     self.counter2 += 1
                 #     rospy.sleep(self.TICK)
                 self.forward()
-                # print("status code 3")
+                self.check_loudness()
                 self.voice_accident()
                 # if self.status_code == 0:
                 #     self.status_code = 3
+                # elsif se
 
             # Fall back
             else:
