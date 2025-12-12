@@ -1,167 +1,523 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 
-import numpy as np
-import rospy
-from geometry_msgs.msg import TwistStamped
-from std_msgs.msg import Float32MultiArray, UInt16
-from sensor_msgs.msg import Range
+"""
+This script makes MiRo look for a green ball (food) and approach it
+while avoiding obstacles using sensor data
+"""
 
-import miro2 as miro
-try:
-    from miro2.lib import wheel_speed2cmd_vel
+# Imports
+import os
+import subprocess
+from math import radians  
+import numpy as np  
+import cv2  
+
+import rospy  
+from sensor_msgs.msg import CompressedImage  
+from sensor_msgs.msg import JointState  
+from cv_bridge import CvBridge, CvBridgeError  
+from geometry_msgs.msg import TwistStamped  
+
+import miro2 as miro  
+
+try:  
+    from miro2.lib import wheel_speed2cmd_vel  
 except ImportError:
-    from miro2.utils import wheel_speed2cmd_vel
+    from miro2.utils import wheel_speed2cmd_vel  
 
+import point_to_sound as listen
+import obstacle_avoidance as avoid
+import miro_ros_interface as mri
 
-class ObstacleAvoidance:
+class MiRoClient:
     """
-    
-    This class handles real-time obstacle detection and avoidance using sonar,
-    cliff, and light sensors. It's designed to work alongside navigation systems -
-    you give it your desired wheel speeds, and it'll override them if it detects danger.
-    
-    NOTE: This worked really well when we merged it with navigation.py - acts as a 
-    safety layer on top of the path planning, catching obstacles the main nav might miss.
+    Script settings below
     """
-    
-    def __init__(self, topic_root):
-        
-        # Set up publisher so we can send movement commands to the robot
-        self.pub_cmd_vel = rospy.Publisher(
-            topic_root + "/control/cmd_vel", TwistStamped, queue_size=0
-        )
-        self.vel = TwistStamped()
+    ##########################
+    TICK = 0.02  # This is the update interval for the main control loop in secs
+    CAM_FREQ = 1  # Number of ticks before camera gets a new frame, increase in case of network lag
+    SLOW = 0.1  # Radial speed when turning on the spot (rad/s)
+    FAST = 0.4  # Linear speed when kicking the ball (m/s)
+    DEBUG = False # Set to True to enable debug views of the cameras
+    TRANSLATION_ONLY = False # Whether to rotate only
+    IS_MIROCODE = False  # Set to True if running in MiRoCODE
 
-        # Store the latest sensor readings - start with safe default values
-        self.sonar = 1.0  # Distance to obstacle 
-        self.cliff_left = 1.0  # Cliff sensor values (1.0 = solid ground)
-        self.cliff_right = 1.0  # We don't really need these since we're on flat ground, but doesn't hurt to have
-        self.light_fl = 0.0  # Light sensor values (0.0 = dark, higher = brighter)
-        self.light_fr = 0.0
+    # formatting order
+    PREPROCESSING_ORDER = ["edge", "smooth", "color", "gaussian"]
+        # set to empty to not preprocess or add the methods in the order you want to implement.
+        # "edge" to use edge detection, "gaussian" to use difference gaussian
+        # "color" to use color segmentation, "smooth" to use smooth blurring,
 
-        # Subscribe to all the sensor topics we care about
-        rospy.Subscriber(topic_root + "/sensors/sonar", Range, self.sonar_cb)
-        rospy.Subscriber(topic_root + "/sensors/cliff", UInt16, self.cliff_cb)
-        rospy.Subscriber(topic_root + "/sensors/light", Float32MultiArray, self.light_cb)
+    # color segmentation format (GREEN)
+    HSV = True  # if true select a color which will convert to hsv format with a range of its own, else you can select your own rgb range
+    f = lambda x: int(0) if (x < 0) else (int(255) if x > 255 else int(x))
+    COLOR_HSV = [f(0), f(255), f(0)]     # target color which will be converted to hsv for processing, format BGR (GREEN)
+    COLOR_LOW = (f(0), f(180), f(0))         # low color segment, format BGR
+    COLOR_HIGH = (f(255), f(255), f(255))  # high color segment, format BGR
 
-        # Thresholds for when we need to react to things
-        self.SONAR_MIN = 0.16  
-        self.SONAR_FAR = 0.35  
-        self.BACKUP_SPEED = -0.15  
-        self.TURN_SPEED = 0.40  
+    # edge detection format
+    INTENSITY_LOW = 50   # min 0, max 500
+    INTENSITY_HIGH = 50  # min 0, max 500
 
-        self.LIGHT_THRESHOLD = 0.75  # Anything brighter than this is worth avoiding
-        self.CLIFF_THRESHOLD = 0.2  # Below this means we're at an edge - not really needed for our setup but good to have
+    # smoothing_blurring
+    GAUSSIAN_BLURRING = False
+    KERNEL_SIZE = 15         # min 3, max 15
+    STANDARD_DEVIATION = 0  # min 0.1, max 4.9
 
+    # difference gaussian
+    DIFFERENCE_SD_LOW = 1.5 # min 0.00, max 1.40
+    DIFFERENCE_SD_HIGH = 0 # min 0.00, max 1.40
+    ##########################
+    """
+    End of script settings
+    """
 
-    # Callback functions - these get called whenever new sensor data arrives
-    def sonar_cb(self, msg):
-        self.sonar = msg.range
+    def reset_head_pose(self):
+        """
+        Reset MiRo head to default position, to avoid having to deal with tilted frames
+        """
+        self.kin_joints = JointState()  # Prepare the empty message
+        self.kin_joints.name = ["tilt", "lift", "yaw", "pitch"]
+        self.kin_joints.position = [0.0, radians(60.0), 0.0, radians(-17)]  # UPDATED HEAD POSITION
 
-    def cliff_cb(self, msg):
+        self.cosmetic_joints = JointState()
+        self.cosmetic_joints.name = ["Ear1","Ear2"]
+        self.kin_joints.position = [1,1]
+
+        t = 0
+        while not rospy.core.is_shutdown():  # Check ROS is running
+            # Publish state to neck servos for 1 sec
+            self.pub_kin.publish(self.kin_joints)
+            rospy.sleep(self.TICK)
+            t += self.TICK
+            if t > 1:
+                break
+        self.INTENSITY_CHECK = lambda x: int(0) if (x < 0) else (int(500) if x > 500 else int(x))
+        self.KERNEL_SIZE_CHECK = lambda x: int(3) if (x < 3) else (int(15) if x > 15 else int(x))
+        self.STANDARD_DEVIATION_PROCESS = lambda x: 0.1 if (x < 0.1) else (4.9 if x > 4.9 else round(x, 1))
+        self.DIFFERENCE_CHECK = lambda x: 0.01 if (x < 0.01) else (1.40 if x > 1.40 else round(x,2))
+
+    def drive(self, speed_l=0.1, speed_r=0.1):  # (m/sec, m/sec)
+        """
+        Wrapper to simplify driving MiRo by converting wheel speeds to cmd_vel
+        """
+        # Prepare an empty velocity command message
+        msg_cmd_vel = TwistStamped()
+
+        # Desired wheel speed (m/sec)
+        wheel_speed = [speed_l, speed_r]
+
+        # Convert wheel speed to command velocity (m/sec, Rad/sec)
+        (dr, dtheta) = wheel_speed2cmd_vel(wheel_speed)
+
+        # Update the message with the desired speed
+        msg_cmd_vel.twist.linear.x = dr
+        msg_cmd_vel.twist.angular.z = dtheta
+
+        # Publish message to control/cmd_vel topic
+        self.vel_pub.publish(msg_cmd_vel)
+
+    def callback_caml(self, ros_image):  # Left camera
+        self.callback_cam(ros_image, 0)
+
+    def callback_camr(self, ros_image):  # Right camera
+        self.callback_cam(ros_image, 1)
+
+    def callback_cam(self, ros_image, index):
+        """
+        Callback function executed upon image arrival
+        """
+        # Silently handle corrupted JPEG frames
         try:
-            # Cliff data comes as an array with left and right values
-            self.cliff_left = msg.data[0]
-            self.cliff_right = msg.data[1]
-        except:
-            pass  # If something goes wrong, just keep the old values
+            # Convert compressed ROS image to raw CV image
+            image = self.image_converter.compressed_imgmsg_to_cv2(ros_image, "rgb8")
+            # Convert from OpenCV's default BGR to RGB
+            image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            # Get image dimensions
+            self.frame_height, self.frame_width, channels = image.shape
+            cropped_image = image[int(self.frame_height/5)*3:self.frame_height,0:self.frame_width]
+            self.x_centre = self.frame_width / 2.0
+            self.y_centre = self.frame_height / 5.0
 
-    def light_cb(self, msg):
-        # Front-left and front-right light sensors
-        self.light_fl = msg.data[0]
-        self.light_fr = msg.data[1]
-
-
-    def avoidance_required(self):
-        """
-        Checking if we need to do any avoiding right now.
-        Returns whether we need to avoid, plus a list of reasons why.
-        """
-        reasons = []
-
-        # Too close to something in front
-        if self.sonar < self.SONAR_FAR:
-            reasons.append("sonar")
-
-        # About to drive off an edge (not really a concern on flat ground, but kept as a safety feature)
-        if self.cliff_left < self.CLIFF_THRESHOLD or self.cliff_right < self.CLIFF_THRESHOLD:
-            reasons.append("cliff")
-
-        # Seeing something really bright (probably a wall or obstacle)
-        if self.light_fl > self.LIGHT_THRESHOLD or self.light_fr > self.LIGHT_THRESHOLD:
-            reasons.append("light_wall")
-
-        return len(reasons) > 0, reasons
-
-
-    def compute_avoidance(self):
-        """
-        Figure out what wheel speeds we need to avoid the obstacle.
-        Returns (left_wheel_speed, right_wheel_speed).
-        Priority order: cliffs first, then sonar, then light.
-        """
-        
-        # PRIORITY 1: Don't fall off edges! (Unlikely to trigger on flat surfaces, but nice safety net)
-        if self.cliff_left < self.CLIFF_THRESHOLD or self.cliff_right < self.CLIFF_THRESHOLD:
-            # Back up and turn away from whichever side detected the cliff
-            if self.cliff_left < self.cliff_right:
-                return self.BACKUP_SPEED, -self.BACKUP_SPEED  # Turn right while backing up
-            else:
-                return -self.BACKUP_SPEED, self.BACKUP_SPEED  # Turn left while backing up
-
-        # PRIORITY 2: Deal with obstacles detected by sonar
-        if self.sonar < self.SONAR_FAR:
+            # Store image as class attribute for further use
+            self.input_camera[index] = cropped_image
             
-            # Way too close - just back straight up
-            if self.sonar < self.SONAR_MIN:
-                return self.BACKUP_SPEED, self.BACKUP_SPEED
+            # Raise the flag: A new frame is available for processing
+            self.new_frame[index] = True
+        except CvBridgeError as e:
+            # Ignore corrupted frames
+            pass
 
-            # Close enough to worry about - turn in place away from brighter side
-            # (assumption: the obstacle is probably on the brighter side)
-            if self.light_fl > self.light_fr:
-                return 0.0, +0.20  # Turn right
-            else:
-                return +0.20, 0.0  # Turn left
-
-        # PRIORITY 3: Avoid bright areas (walls, reflective surfaces, etc.)
-        if self.light_fl > self.LIGHT_THRESHOLD or self.light_fr > self.LIGHT_THRESHOLD:
-            # Turn away from the brighter side
-            if self.light_fl > self.light_fr:
-                return 0.0, +0.10  # Turn right gently
-            else:
-                return +0.10, 0.0  # Turn left gently
-
-        # All clear - no avoidance needed
-        return 0.0, 0.0
-
-
-    def step(self, base_left, base_right):
+    def detect_ball(self, frame, index):
         """
-        Main control loop step. Give it the wheel speeds you WANT to use,
-        and it'll either use them (if safe) or override with avoidance.
-        
-        When integrated with navigation.py, the nav system passes its computed wheel speeds
-        here, and this acts as a safety override. Worked great in testing!
-        
-        Returns whether avoidance was triggered and why.
+        Image processing operations, fine-tuned to detect a small,
+        toy green ball in a given frame.
         """
-        
-        # Check if we need to avoid anything
-        avoid_now, reasons = self.avoidance_required()
+        if frame is None:  # Sanity check
+            return
 
-        if avoid_now:
-            # Override the requested speeds with avoidance behavior
-            left, right = self.compute_avoidance()
+        # Debug window to show the frame
+        if self.DEBUG:
+            cv2.imshow("camera" + str(index), frame)
+            cv2.waitKey(1)
+
+        # Flag this frame as processed, so that it's not reused in case of lag
+        self.new_frame[index] = False
+
+        processed_img = frame
+
+        for method in self.PREPROCESSING_ORDER:
+            if method == "color":
+                if self.HSV == True:
+                    # Get image in HSV (hue, saturation, value) colour format
+                    im_hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
+
+                    # Specify target ball colour
+                    rgb_colour = np.uint8([[self.COLOR_HSV]])  # Green (Note: BGR)
+                    # Convert this colour to HSV colour model
+                    hsv_colour = cv2.cvtColor(rgb_colour, cv2.COLOR_RGB2HSV)
+
+                    # Extract colour boundaries for masking image
+                    # Get the hue value from the numpy array containing target colour
+                    target_hue = hsv_colour[0, 0][0]
+                    hsv_lo_end = np.array([target_hue - 5, 70, 70])
+                    hsv_hi_end = np.array([target_hue + 5, 255, 255])
+
+                    # Generate the mask based on the desired hue range
+                    mask = cv2.inRange(im_hsv, hsv_lo_end, hsv_hi_end)
+                    processed_img = cv2.bitwise_and(processed_img, processed_img, mask=mask)
+                else:
+                    mask = cv2.inRange(frame, self.COLOR_LOW, self.COLOR_HIGH)
+                    processed_img = cv2.bitwise_and(processed_img, processed_img, mask=mask)
+
+            elif method == "gaussian":
+                sigma1 = self.DIFFERENCE_CHECK(self.DIFFERENCE_SD_LOW)
+                sigma2 = self.DIFFERENCE_CHECK(self.DIFFERENCE_SD_HIGH)
+                img_gauss1 = cv2.GaussianBlur(processed_img, (0, 0), sigma1)
+                img_gauss2 = cv2.GaussianBlur(processed_img, (0, 0), sigma2)
+                processed_img = img_gauss1 - img_gauss2
+
+            elif method == "smooth":
+                kernel_size = (self.KERNEL_SIZE_CHECK(self.KERNEL_SIZE), self.KERNEL_SIZE_CHECK(self.KERNEL_SIZE))
+
+                if not self.GAUSSIAN_BLURRING:
+                    # average smoothing
+                    kernel = np.ones(kernel_size, np.float32) / kernel_size[0]**2
+                    processed_img = cv2.filter2D(processed_img, -1, kernel)
+
+                else:
+                    # Gaussian blurring
+                    sigma = self.STANDARD_DEVIATION_PROCESS(self.STANDARD_DEVIATION)
+                    processed_img = cv2.GaussianBlur(processed_img, (0,0), sigma)
+
+            elif method == "edge":
+                processed_img = cv2.Canny(processed_img, self.INTENSITY_LOW, self.INTENSITY_HIGH)
+
+        # just a debug window to show the mask
+        if self.DEBUG:
+            cv2.imshow("mask" + str(index), processed_img)
+            cv2.waitKey(1)
+
+        if len(processed_img.shape) == 3:
+            processed_img = cv2.cvtColor(processed_img, cv2.COLOR_BGR2GRAY)
+
+        # just a debug window to show the mask
+        if self.DEBUG:
+            cv2.imshow("gray" + str(index), processed_img)
+            cv2.waitKey(1)
+
+        # Fine-tune parameters
+        ball_detect_min_dist_between_cens = 40  # Empirical
+        canny_high_thresh = 10  # Empirical
+        ball_detect_sensitivity = 10  # Lower detects more circles, so it's a trade-off
+        ball_detect_min_radius = 5  # Arbitrary, empirical
+        ball_detect_max_radius = 50  # Arbitrary, empirical
+
+        # Find circles using OpenCV routine
+        # This function returns a list of circles, with their x, y and r values
+        circles = cv2.HoughCircles(
+            processed_img,
+            cv2.HOUGH_GRADIENT,
+            1,
+            ball_detect_min_dist_between_cens,
+            param1=canny_high_thresh,
+            param2=ball_detect_sensitivity,
+            minRadius=ball_detect_min_radius,
+            maxRadius=ball_detect_max_radius,
+        )
+
+        if circles is None:
+            # If no circles were found, just display the original image
+            return
+
+        # Get the largest circle
+        max_circle = None
+        self.max_rad = 0
+        circles = np.uint16(np.around(circles))
+        for c in circles[0, :]:
+            if c[2] > self.max_rad:
+                self.max_rad = c[2]
+                max_circle = c
+        # This shouldn't happen, but you never know...
+        if max_circle is None:
+            return
+
+        # Append detected circle and its centre to the frame
+        cv2.circle(frame, (max_circle[0], max_circle[1]), max_circle[2], (0, 255, 0), 2)
+        cv2.circle(frame, (max_circle[0], max_circle[1]), 2, (0, 0, 255), 3)
+        if self.DEBUG:
+            cv2.imshow("circles" + str(index), frame)
+            cv2.waitKey(1)
+
+        # Normalise values to: x,y = [-0.5, 0.5], r = [0, 1]
+        max_circle = np.array(max_circle).astype("float32")
+        max_circle[0] -= self.x_centre
+        max_circle[0] /= self.frame_width
+        max_circle[1] -= self.y_centre
+        max_circle[1] /= self.frame_width
+        max_circle[1] *= -1.0
+        max_circle[2] /= self.frame_width
+
+        # Return a list values [x, y, r] for the largest circle
+        return [max_circle[0], max_circle[1], max_circle[2]]
+
+    def look_for_ball(self):
+        """
+         Rotate MiRo if it doesn't see a ball in its current
+        position, until it sees one.
+        """
+        if self.just_switched:  # Print once
+            print("MiRo is looking for the ball...")
+            self.just_switched = False
+        for index in range(2):  # For each camera (0 = left, 1 = right)
+            # Skip if there's no new image, in case the network is choking
+            if not self.new_frame[index]:
+                continue
+            image = self.input_camera[index]
+            # Run the detect ball procedure
+            self.ball[index] = self.detect_ball(image, index)
+        # If no ball has been detected
+        if not self.ball[0] and not self.ball[1]:
+            self.drive(self.SLOW, -self.SLOW)
         else:
-            # All clear - use the speeds that were requested
-            left, right = base_left, base_right
+            self.status_code = 2  # Switch to the second action
+            self.just_switched = True
 
-        # Convert wheel speeds to the velocity command format ROS expects
-        (dr, dtheta) = wheel_speed2cmd_vel([left, right])
-        self.vel.twist.linear.x = dr  # Forward/backward speed
-        self.vel.twist.angular.z = dtheta  # Turning speed
+    def lock_onto_ball(self, error=25):
+        """
+         Once a ball has been detected, turn MiRo to face it
+        """
+        if self.just_switched:  # Print once
+            print("MiRo is locking on to the ball")
+            self.just_switched = False
+        for index in range(2):  # For each camera (0 = left, 1 = right)
+            # Skip if there's no new image, in case the network is choking
+            if not self.new_frame[index]:
+                continue
+            image = self.input_camera[index]
+            # Run the detect ball procedure
+            self.ball[index] = self.detect_ball(image, index)
+        # If only the right camera sees the ball, rotate clockwise
+        if not self.ball[0] and self.ball[1]:
+            self.drive(self.SLOW, -self.SLOW)
+        # Conversely, rotate counter-clockwise
+        elif self.ball[0] and not self.ball[1]:
+            self.drive(-self.SLOW, self.SLOW)
+        # Make the MiRo face the ball if it's visible with both cameras
+        elif self.ball[0] and self.ball[1]:
+            error = 0.05  # 5% of image width
+            # Use the normalised values
+            left_x = self.ball[0][0]  # should be in range [0.0, 0.5]
+            right_x = self.ball[1][0]  # should be in range [-0.5, 0.0]
+            rotation_speed = 0.03  # Turn even slower now
+            if abs(left_x) - abs(right_x) > error:
+                self.drive(rotation_speed, -rotation_speed)  # turn clockwise
+            elif abs(left_x) - abs(right_x) < -error:
+                self.drive(-rotation_speed, rotation_speed)  # turn counter-clockwise
+            else:
+                # Successfully turned to face the ball
+                self.status_code = 3  # Switch to the third action
+                self.just_switched = True
+                self.bookmark = self.counter
+        # Otherwise, the ball is lost
+        else:
+            self.status_code = 0  # Go back to square 1...
+            print("MiRo has lost the ball...")
+            self.just_switched = True
+
+    #  UPDATED KICK FUNCTION
+    def kick(self):
+        """
+         Once MiRO is in position, this function should drive the MiRo
+        forward until it kicks the ball!
+        """
+        if not hasattr(self, 'has_kicked'):
+            self.has_kicked = False  # Initialize kick flag
+        if not hasattr(self, 'kick_count'):
+            self.kick_count = 0
+
+        if self.has_kicked:
+            # FOUND THE FOOD
+            self.drive(0.0, 0.0)
+            while not rospy.core.is_shutdown():
+                for i in range(0, 3):
+                    miro_pub.pub_tone(frequency=880, volume=100, duration=3)
+                    rospy.sleep(0.2)
+                    miro_pub.pub_tone(frequency=0, volume=0, duration=3)
+                    rospy.sleep(0.2)
+                rospy.sleep(3)
+            return
         
-        # Send the command to the robot
-        self.pub_cmd_vel.publish(self.vel)
+        if self.just_switched:
+            print("MiRo is kicking the ball!")
+            self.just_switched = False
 
-        return avoid_now, reasons
+        if self.counter <= self.bookmark + 2 / self.TICK and not self.TRANSLATION_ONLY:
+            self.drive(self.FAST, self.FAST)  # Move forward to kick
+        else:
+            self.drive(0.0, 0.0)
+            if self.kick_count < 2 and (self.counter > self.bookmark + 2 / self.TICK):
+                self.kick_count += 1
+
+                if self.kick_count >= 2:
+                    self.has_kicked = True
+                    print("Found the food")
+
+                if not self.has_kicked:
+                    self.status_code = 0
+
+                self.just_switched = True
+
+    def __init__(self, listen=False):
+        self.listen = listen
+        # Initialise a new ROS node to communicate with MiRo, if needed
+        if not self.IS_MIROCODE and listen == False:
+            rospy.init_node("kick_green_ball", anonymous=True)
+        # Give it some time to make sure everything is initialised
+        rospy.sleep(2.0)
+        # Initialise CV Bridge
+        self.image_converter = CvBridge()
+        # Individual robot name acts as ROS topic prefix
+        topic_base_name = "/" + os.getenv("MIRO_ROBOT_NAME")
+        # Create two new subscribers to receive camera images with attached callbacks
+        self.sub_caml = rospy.Subscriber(
+            topic_base_name + "/sensors/caml/compressed",
+            CompressedImage,
+            self.callback_caml,
+            queue_size=1,
+            tcp_nodelay=True,
+        )
+        self.sub_camr = rospy.Subscriber(
+            topic_base_name + "/sensors/camr/compressed",
+            CompressedImage,
+            self.callback_camr,
+            queue_size=1,
+            tcp_nodelay=True,
+        )
+        # Create a new publisher to send velocity commands to the robot
+        self.vel_pub = rospy.Publisher(
+            topic_base_name + "/control/cmd_vel", TwistStamped, queue_size=0
+        )
+        # Create a new publisher to move the robot head
+        self.pub_kin = rospy.Publisher(
+            topic_base_name + "/control/kinematic_joints", JointState, queue_size=0
+        )
+        # Create handle to store images
+        self.input_camera = [None, None]
+        # New frame notification
+        self.new_frame = [False, False]
+        # Create variable to store a list of ball's x, y, and r values for each camera
+        self.ball = [None, None]
+        # Set the default frame width (gets updated on receiving an image)
+        self.frame_width = 640
+        # Action selector to reduce duplicate printing to the terminal
+        self.just_switched = True
+        # Bookmark
+        self.bookmark = 0
+        # Track Miro distance to food
+        self.kick_count = 0
+        # Move the head to default pose
+        self.reset_head_pose()
+
+    def loop(self):
+        """
+        Main control loop - UPDATED WITH FIXED OBSTACLE AVOIDANCE
+        """
+        print("MiRo plays ball, press CTRL+C to halt...")
+        # Main control loop iteration counter
+        self.counter = 0
+        self.counter2 = 0
+        # This switch loops through MiRo behaviours:
+        # Find ball, lock on to the ball and kick ball
+        self.status_code = 0
+        
+        if self.listen == False:
+            listening = listen.AudioClient(main)
+        else:
+            listening = self.listen
+        topic_root = "/" + os.getenv("MIRO_ROBOT_NAME")
+        avoidObstacle = avoid.ObstacleAvoidance(topic_root)
+
+        while not rospy.core.is_shutdown():
+
+            # Step 1. Look for food
+            if self.status_code == 1:
+                # Check if obstacle avoidance is needed (NON-BLOCKING)
+                avoiding, reasons = avoidObstacle.avoidance_required()
+                
+                if avoiding:
+                    # Perform obstacle avoidance (overrides normal movement)
+                    avoidObstacle.step(0.0, 0.0)
+                    if self.counter2 % 50 == 0:  # Print occasionally
+                        print(f"Avoiding: {reasons}")
+                    self.counter2 += 1
+                else:
+                    # No obstacles - proceed with normal ball searching
+                    if self.counter % self.CAM_FREQ == 0:
+                        self.look_for_ball()
+                        
+                # If noise detected, start noise following loop
+                listening.voice_accident()
+                if listening.status_code == 2:
+                    listening.loop()
+
+            # Step 2. Orient towards food
+            elif self.status_code == 2:
+                # Check for obstacles even while locking on
+                avoiding, reasons = avoidObstacle.avoidance_required()
+                if avoiding:
+                    avoidObstacle.step(0.0, 0.0)
+                    if self.counter2 % 50 == 0:
+                        print(f"Avoiding while locking: {reasons}")
+                    self.counter2 += 1
+                else:
+                    self.lock_onto_ball()
+
+            # Step 3. Move towards food
+            elif self.status_code == 3:
+                # Check for obstacles while approaching
+                avoiding, reasons = avoidObstacle.avoidance_required()
+                if avoiding:
+                    # If obstacle detected during approach, go back to searching
+                    avoidObstacle.step(0.0, 0.0)
+                    print(f"Obstacle detected while approaching: {reasons} - repositioning")
+                    self.status_code = 1
+                    self.just_switched = True
+                else:
+                    self.kick()
+
+            # Fall back
+            else:
+                self.status_code = 1
+
+            # Yield
+            self.counter += 1
+            rospy.sleep(self.TICK)
+
+
+# This condition fires when the script is called directly
+if __name__ == "__main__":
+    main = MiRoClient()  # Instantiate class
+    miro_pub = mri.MiRoPublishers(True)
+    main.loop()  # Run the main control loop
