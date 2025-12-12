@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 
 """
-This script makes MiRo look for a blue ball and kick it
+This script makes MiRo look for its food (green object) and reach it.
 
 The code was tested for Python 2 and 3
 For Python 2 you might need to change the shebang line to
@@ -41,7 +41,7 @@ class MiRoClient:
     TICK = 0.02  # This is the update interval for the main control loop in secs
     CAM_FREQ = 1  # Number of ticks before camera gets a new frame, increase in case of network lag
     SLOW = 0.1  # Radial speed when turning on the spot (rad/s)
-    FAST = 0.4  # Linear speed when kicking the ball (m/s)
+    FAST = 0.4  # Linear speed when finding the food (m/s)
     DEBUG = False # Set to True to enable debug views of the cameras
     TRANSLATION_ONLY = False # Whether to rotate only
     IS_MIROCODE = False  # Set to True if running in MiRoCODE
@@ -84,11 +84,14 @@ class MiRoClient:
         self.kin_joints.name = ["tilt", "lift", "yaw", "pitch"]
         self.kin_joints.position = [0.0, radians(60.0), 0.0, radians(-22)]
 
+        # self.cosmetic_joints = JointState()
+        # self.cosmetic_joints.name = ["Ear1","Ear2"]
+        # self.kin_joints.position = [1,1]git 
+
         t = 0
         while not rospy.core.is_shutdown():  # Check ROS is running
             # Publish state to neck servos for 1 sec
             self.pub_kin.publish(self.kin_joints)
-            miro_pub.pub_cosmetic_joints(ear_left=1,ear_right=1)
             rospy.sleep(self.TICK)
             t += self.TICK
             if t > 1:
@@ -153,10 +156,9 @@ class MiRoClient:
             # Ignore corrupted frames
             pass
 
-    def detect_ball(self, frame, index):
+    def detect_food(self, frame, index):
         """
-        Image processing operations, fine-tuned to detect a small,
-        toy blue ball in a given frame.
+        Image processing operations, fine-tuned to detect a green object in a given frame.
         """
         if frame is None:  # Sanity check
             return
@@ -177,8 +179,8 @@ class MiRoClient:
                     # Get image in HSV (hue, saturation, value) colour format
                     im_hsv = cv2.cvtColor(frame, cv2.COLOR_RGB2HSV)
 
-                    # Specify target ball colour
-                    rgb_colour = np.uint8([[self.COLOR_HSV]])  # e.g. Blue (Note: BGR)
+                    # Specify target food colour
+                    rgb_colour = np.uint8([[self.COLOR_HSV]])  # Green
                     # Convert this colour to HSV colour model
                     hsv_colour = cv2.cvtColor(rgb_colour, cv2.COLOR_RGB2HSV)
 
@@ -186,7 +188,7 @@ class MiRoClient:
                     # Get the hue value from the numpy array containing target colour
                     target_hue = hsv_colour[0, 0][0]
                     hsv_lo_end = np.array([target_hue - 20, 70, 70])
-                    hsv_hi_end = np.array([target_hue + 20, 255, 255])
+                    hsv_hi_end = np.array([target_hue + 5, 255, 255])
 
                     # Generate the mask based on the desired hue range
                     mask = cv2.inRange(im_hsv, hsv_lo_end, hsv_hi_end)
@@ -287,87 +289,87 @@ class MiRoClient:
         # Return a list values [x, y, r] for the largest circle
         return [max_circle[0], max_circle[1], max_circle[2]]
 
-    def look_for_ball(self):
+    def look_for_food(self):
         """
-        [1 of 3] Rotate MiRo if it doesn't see a ball in its current
+        [1 of 3] Rotate MiRo if it doesn't see its food in its current
         position, until it sees one.
         """
         if self.just_switched:  # Print once
-            print("MiRo is looking for the ball...")
+            print("MiRo is looking for food...")
             self.just_switched = False
         for index in range(2):  # For each camera (0 = left, 1 = right)
             # Skip if there's no new image, in case the network is choking
             if not self.new_frame[index]:
                 continue
             image = self.input_camera[index]
-            # Run the detect ball procedure
-            self.ball[index] = self.detect_ball(image, index)
-        # If no ball has been detected
-        if not self.ball[0] and not self.ball[1]:
+            # Run the detect food procedure
+            self.food[index] = self.detect_food(image, index)
+        # If no food has been detected
+        if not self.food[0] and not self.food[1]:
             self.drive(self.SLOW, -self.SLOW)
         else:
             self.status_code = 2  # Switch to the second action
             self.just_switched = True
 
-    def lock_onto_ball(self, error=25):
+    def lock_onto_food(self, error=25):
         """
-        [2 of 3] Once a ball has been detected, turn MiRo to face it
+        [2 of 3] Once the food has been detected, turn MiRo to face it
         """
         if self.just_switched:  # Print once
-            print("MiRo is locking on to the ball")
+            print("MiRo is locking on to its food")
             self.just_switched = False
         for index in range(2):  # For each camera (0 = left, 1 = right)
             # Skip if there's no new image, in case the network is choking
             if not self.new_frame[index]:
                 continue
             image = self.input_camera[index]
-            # Run the detect ball procedure
-            self.ball[index] = self.detect_ball(image, index)
-        # If only the right camera sees the ball, rotate clockwise
-        if not self.ball[0] and self.ball[1]:
+            # Run the detect food procedure
+            self.food[index] = self.detect_food(image, index)
+        # If only the right camera sees the food, rotate clockwise
+        if not self.food[0] and self.food[1]:
             self.drive(self.SLOW, -self.SLOW)
         # Conversely, rotate counter-clockwise
-        elif self.ball[0] and not self.ball[1]:
+        elif self.food[0] and not self.food[1]:
             self.drive(-self.SLOW, self.SLOW)
-        # Make the MiRo face the ball if it's visible with both cameras
-        elif self.ball[0] and self.ball[1]:
+        # Make the MiRo face the food if it's visible with both cameras
+        elif self.food[0] and self.food[1]:
             error = 0.05  # 5% of image width
             # Use the normalised values
-            left_x = self.ball[0][0]  # should be in range [0.0, 0.5]
-            right_x = self.ball[1][0]  # should be in range [-0.5, 0.0]
+            left_x = self.food[0][0]  # should be in range [0.0, 0.5]
+            right_x = self.food[1][0]  # should be in range [-0.5, 0.0]
             rotation_speed = 0.03  # Turn even slower now
             if abs(left_x) - abs(right_x) > error:
                 self.drive(rotation_speed, -rotation_speed)  # turn clockwise
             elif abs(left_x) - abs(right_x) < -error:
                 self.drive(-rotation_speed, rotation_speed)  # turn counter-clockwise
             else:
-                # Successfully turned to face the ball
+                # Successfully turned to face the food
                 self.status_code = 3  # Switch to the third action
                 self.just_switched = True
                 self.bookmark = self.counter
-        # Otherwise, the ball is lost :-(
+        # Otherwise, the food is lost :-(
         else:
             self.status_code = 0  # Go back to square 1...
-            print("MiRo has lost the ball...")
+            print("MiRo has lost the food...")
             self.just_switched = True
 
     # GOAAAL
-    def kick(self):
+    def eat(self):
         """
         [3 of 3] Once MiRO is in position, this function should drive the MiRo
-        forward until it kicks the ball!
+        forward until it eats the food!
         """
-        if not hasattr(self, 'has_kicked'):
-            self.has_kicked = False  # Initialize kick flag
+        if not hasattr(self, 'has_ate'):
+            self.has_ate = False  # Initialize ate flag
         if not hasattr(self, 'kick_count'):
             self.kick_count = 0
 
-        if self.has_kicked:
+        if self.has_ate:
             # FOUND THE FOOD!!????
             self.drive(0.0, 0.0)
             while not rospy.core.is_shutdown():
                 for i in range (0,3):
-                    miro_pub.pub_tone(frequency=880, volume=255, duration=3)
+                    miro_pub.pub_tone(frequency=880, volume=100, duration=3)
                     rospy.sleep(0.2)
                     miro_pub.pub_tone(frequency=0, volume=0, duration=3)
                     rospy.sleep(0.2)
@@ -375,21 +377,21 @@ class MiRoClient:
             return
         
         if self.just_switched:
-                print("MiRo is kicking the ball!")
+                print("MiRo is eating the food!")
                 self.just_switched = False
 
         if self.counter <= self.bookmark + 2 / self.TICK and not self.TRANSLATION_ONLY:
-            self.drive(self.FAST, self.FAST)  # Move forward to kick
+            self.drive(self.FAST, self.FAST)  # Move forward to eat
         else:
             self.drive(0.0, 0.0)
             if self.kick_count < 2 and (self.counter > self.bookmark + 2 / self.TICK):
                 self.kick_count += 1
 
                 if self.kick_count >= 2:
-                    self.has_kicked = True
+                    self.has_ate = True
                     print("Found the food")
 
-                if not self.has_kicked:
+                if not self.has_ate:
                     self.status_code = 0
 
                 self.just_switched = True
@@ -432,8 +434,8 @@ class MiRoClient:
         self.input_camera = [None, None]
         # New frame notification
         self.new_frame = [False, False]
-        # Create variable to store a list of ball's x, y, and r values for each camera
-        self.ball = [None, None]
+        # Create variable to store a list of food's x, y, and r values for each camera
+        self.food = [None, None]
         # Set the default frame width (gets updated on receiving an image)
         self.frame_width = 640
         # Action selector to reduce duplicate printing to the terminal
@@ -449,12 +451,12 @@ class MiRoClient:
         """
         Main control loop
         """
-        print("MiRo plays ball, press CTRL+C to halt...")
+        print("MiRo finds food, press CTRL+C to halt...")
         # Main control loop iteration counter
         self.counter = 0
         self.counter2 = 0
         # This switch loops through MiRo behaviours:
-        # Find ball, lock on to the ball and kick ball
+        # Find food, lock on to the food and eat food
         self.status_code = 0
         
         if self.listen == False:
@@ -477,9 +479,9 @@ class MiRoClient:
                 #     self.counter2 += 1
                 #     rospy.sleep(self.TICK)
                     
-                # Every once in a while, look for ball
+                # Every once in a while, look for food
                 if self.counter % self.CAM_FREQ == 0:
-                    self.look_for_ball()
+                    self.look_for_food()
                 # If noise detected, start noise following loop
                 listening.voice_accident()
                 if listening.status_code == 2:
@@ -487,11 +489,12 @@ class MiRoClient:
 
             # Step 2. Orient towards food
             elif self.status_code == 2:
-                self.lock_onto_ball()
+                
+                self.lock_onto_food()
 
             # Step 3. Move towards
             elif self.status_code == 3:
-                self.kick()
+                self.eat()
 
             # Fall back
             else:
@@ -504,6 +507,6 @@ class MiRoClient:
 
 # This condition fires when the script is called directly
 if __name__ == "__main__":
-    miro_pub = mri.MiRoPublishers(True)
     main = MiRoClient()  # Instantiate class
+    miro_pub = mri.MiRoPublishers(True)
     main.loop()  # Run the main control loop
