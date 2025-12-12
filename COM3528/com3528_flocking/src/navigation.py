@@ -29,7 +29,7 @@ try:  # For convenience, import this util separately
 except ImportError:
     from miro2.utils import wheel_speed2cmd_vel  # Python 2
 
-import point_to_sound as listen
+import follow_signal as listen
 import obstacle_avoidance as avoid
 import miro_ros_interface as mri
 
